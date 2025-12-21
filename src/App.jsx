@@ -748,7 +748,7 @@ return (
     <header className="app-header">
       <div className="brand-row">
         <h1>
-          Slip Rooms <span className="brand-emoji">🎟️</span>
+          SLIPROOMS <span className="brand-emoji">V1</span>
         </h1>
 
         {/* Profile pill in header */}
