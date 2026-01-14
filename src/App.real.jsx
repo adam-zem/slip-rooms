@@ -1,224 +1,45 @@
 // src/App.jsx
 import { useState, useEffect, useRef } from "react";
+import { Routes, Route, useNavigate } from "react-router-dom";
 import "./App.css";
 import { useAuth } from "./contexts/AuthContext";
+import { signOut } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "./firebase";
 import AuthPage from "./pages/AuthPage";
+import ProfilePage from "./pages/ProfilePage";
+import { useGames } from "./hooks/useGames";
+import { getPeriodLabel } from "./services/espnService";
+import { awardMessageXP, awardXP, XP_REWARDS } from "./services/xpService";
+import {
+  createRoom as createRoomInFirestore,
+  sendMessage as sendMessageToFirestore,
+  subscribeToMessages,
+  deleteRoom as deleteRoomFromFirestore,
+  getRoomsBySport,
+  joinRoom,
+  leaveRoom,
+  subscribeToAllRooms,
+} from "./services/chatService";
 
 
 
 //
-// ---------------- META CONFIG ----------------
+// ---------------- CONFIG ----------------
 //
 
 const emojiOptions = ["🔥", "😭", "😅", "🤞", "💰", "🍀", "🧱", "🤯", "😡"];
 
-const crowdReactions = [
-  "This drive is everything 😳",
-  "If this misses, I'm done betting.",
-  "This is the sweatiest slip I’ve ever had 💦",
-  "One bucket and we’re ALIVE 🔥",
-  "I can’t watch… someone tell me when it hits 😭",
-  "Why did I think this was free money 😅",
-  "If this cashes, I’m retiring… until tomorrow.",
-  "The live line is getting spooky 👻",
-];
-
-const fakeSweatUsers = [
-  "SlipKing89",
-  "EVNerd",
-  "BadBeatBilly",
-  "TeaserTom",
-  "ParlayPrincess",
-  "SweatGoblin",
-  "AltLineLarry",
-  "BankrollBeth",
-];
-
-const sweatMessages = [
-  "He needs ONE more catch, I’m shaking 😭",
-  "If this hits I’m buying everyone wings 🔥",
-  "Why did I put the rent on this 😅",
-  "Clock is MOVING, love this pace ⏱️",
-  "This ref has money on the other side fr 💀",
-  "I’m sweating this like Game 7",
-  "One more bucket and I’m free 🙏",
-  "No more fouls PLEASE 😭",
-];
-
-// CHAOS MODE: fake chat users for the main room chat
-const fakeChatUsers = [
-  { name: "SlipKing", emoji: "🔥" },
-  { name: "EVNerd", emoji: "🧠" },
-  { name: "BadBeatBilly", emoji: "💀" },
-  { name: "TeaserTom", emoji: "🧵" },
-  { name: "ParlayPrincess", emoji: "👑" },
-  { name: "AltLineLarry", emoji: "📈" },
-  { name: "HookHater", emoji: "😡" },
-  { name: "BankrollBeth", emoji: "💰" },
-  { name: "SweatGoblin", emoji: "👹" },
-  { name: "LiveLineLuca", emoji: "📊" },
-  { name: "OvertimeOllie", emoji: "⏱️" },
-  { name: "BadBeatBob", emoji: "🩹" },
-  { name: "UndersClub", emoji: "🧊" },
-  { name: "AltOversOnly", emoji: "🚀" },
-  { name: "UnitMerchant", emoji: "📦" },
-  { name: "DeGenDan", emoji: "🎲" },
-  { name: "SweatSensei", emoji: "🥋" },
-  { name: "RedZoneRicky", emoji: "🟥" },
-  { name: "TiltedTina", emoji: "🥴" },
-  { name: "SoonRich", emoji: "🌈" },
-];
-
-// Templates for chaos chat – generic so they fit all rooms
-const fakeChatMessages = [
-  "ONE MORE bucket I’m begging 😭",
-  "If this misses I’m retired until tomorrow.",
-  "This is the sweatiest leg on the slip fr 💦",
-  "Why is the offense playing like this now 💀",
-  "I need this dude to remember how to play ball.",
-  "Clock moving way too fast I’m sick 😭",
-  "If this hits drinks on me 🔥",
-  "I called this in the first quarter btw.",
-  "We are SO ALIVE right now 🤞",
-  "Bookies are sweating this one for sure.",
-  "If he sells my super boost I’m done.",
-  "Red zone again ohhh here we go 👀",
-  "Just need overtime, is that too much to ask?",
-  "Everyone stay calm, we’re actually vibing.",
-  "We are one flag away from glory.",
-  "I’m emotionally hedged but financially not 😅",
-  "Live line is getting disrespectful ngl.",
-  "I’m riding this till the wheels fall off.",
-  "He’s on triple double watch LETS GO.",
-  "Please just feed him the ball man.",
-];
-
-function randomUserCount() {
-  return Math.floor(Math.random() * 500) + 10;
-}
-
 //
-// ---------------- INITIAL MARKETS ----------------
+// ---------------- INITIAL MARKETS (empty) ----------------
 //
 
 const initialMarkets = [
-  {
-    id: "nfl",
-    label: "NFL",
-    rooms: [
-      {
-        id: "nfl-1",
-        name: "Mahomes 2+ Passing TDs",
-        game: "Chiefs @ Bills",
-        odds: "+120",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [
-          {
-            id: 1,
-            user: "Adam",
-            text: "Mahomes primetime… this feels like free money 😅",
-            timestamp: new Date().toISOString(),
-          },
-        ],
-      },
-      {
-        id: "nfl-2",
-        name: "Josh Allen Anytime TD",
-        game: "Chiefs @ Bills",
-        odds: "+150",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-      {
-        id: "nfl-3",
-        name: "Travis Kelce 60+ Yards",
-        game: "Chiefs @ Bills",
-        odds: "-110",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-      {
-        id: "nfl-4",
-        name: "James Cook 50+ Rushing Yards",
-        game: "Chiefs @ Bills",
-        odds: "-105",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-    ],
-  },
-
-  {
-    id: "nba",
-    label: "NBA",
-    rooms: [
-      {
-        id: "nba-1",
-        name: "Tatum 25+ Points",
-        game: "Lakers @ Celtics",
-        odds: "-105",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-      {
-        id: "nba-2",
-        name: "LeBron 8+ Assists",
-        game: "Lakers @ Celtics",
-        odds: "+135",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-      {
-        id: "nba-3",
-        name: "Anthony Davis 10+ Rebounds",
-        game: "Lakers @ Celtics",
-        odds: "-120",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-    ],
-  },
-
-  {
-    id: "mlb",
-    label: "MLB",
-    rooms: [
-      {
-        id: "mlb-1",
-        name: "Judge 1+ Home Run",
-        game: "Yankees @ Red Sox",
-        odds: "+210",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-      {
-        id: "mlb-2",
-        name: "Devers 1+ RBI",
-        game: "Yankees @ Red Sox",
-        odds: "+145",
-        legsHit: 0,
-        totalLegs: 1,
-        userCount: randomUserCount(),
-        messages: [],
-      },
-    ],
-  },
+  { id: "nfl", label: "NFL", rooms: [] },
+  { id: "nba", label: "NBA", rooms: [] },
+  { id: "mlb", label: "MLB", rooms: [] },
+  { id: "nhl", label: "NHL", rooms: [] },
+  { id: "soccer", label: "Soccer", rooms: [] },
 ];
 
 //
@@ -245,98 +66,325 @@ function formatTime(timestamp) {
 }
 
 //
-// ---------------- LIVE GAME HELPERS ----------------
-//
-
-function createInitialLiveGame(marketId, room) {
-  if (!room) {
-    return {
-      awayTeam: "Away",
-      homeTeam: "Home",
-      awayScore: 0,
-      homeScore: 0,
-      period: "—",
-      clock: "--:--",
-      possession: "home",
-      winProb: 50,
-      winProbTeam: "home",
-      status: "Waiting for kickoff",
-    };
-  }
-
-  let awayTeam = "Away";
-  let homeTeam = "Home";
-  if (room.game && room.game.includes("@")) {
-    const [away, home] = room.game.split("@").map((s) => s.trim());
-    awayTeam = away || awayTeam;
-    homeTeam = home || homeTeam;
-  }
-
-  const isBaseball = marketId === "mlb";
-
-  return {
-    awayTeam,
-    homeTeam,
-    awayScore: Math.floor(Math.random() * 10),
-    homeScore: Math.floor(Math.random() * 10),
-    period: isBaseball ? "Top 5th" : "Q3",
-    clock: isBaseball ? "—" : "07:32",
-    possession: Math.random() < 0.5 ? "home" : "away",
-    winProb: 55,
-    winProbTeam: Math.random() < 0.5 ? "home" : "away",
-    status: "Live",
-  };
-}
-
-function tickLiveGame(prev) {
-  if (!prev || prev.status !== "Live") return prev;
-
-  let { homeScore, awayScore } = prev;
-
-  if (Math.random() < 0.45) {
-    const scorer = Math.random() < 0.5 ? "home" : "away";
-    const delta = Math.random() < 0.5 ? 3 : 7;
-    if (scorer === "home") homeScore += delta;
-    else awayScore += delta;
-  }
-
-  const diff = homeScore - awayScore;
-  const winProbTeam =
-    diff > 0 ? "home" : diff < 0 ? "away" : prev.winProbTeam || "home";
-
-  let base = 50 + Math.max(-20, Math.min(20, diff * 4));
-  base += (Math.random() - 0.5) * 4;
-  const winProb = Math.max(5, Math.min(95, base));
-
-  const periodsNflNba = ["Q2 · 10:14", "Q3 · 6:48", "Q4 · 3:21", "Late 4th"];
-  const periodsMlb = ["Top 5th", "Bot 6th", "Top 7th", "Late 8th"];
-  const isBaseball =
-    prev.period?.includes("th") || prev.period?.includes("Top");
-  const period = isBaseball
-    ? periodsMlb[Math.floor(Math.random() * periodsMlb.length)]
-    : periodsNflNba[Math.floor(Math.random() * periodsNflNba.length)];
-  const clock = isBaseball ? "—" : period.split("·")[1]?.trim() || prev.clock;
-
-  return {
-    ...prev,
-    homeScore,
-    awayScore,
-    period,
-    clock,
-    possession: winProbTeam,
-    winProb,
-    winProbTeam,
-  };
-}
-
-//
 // ---------------- COMPONENT ----------------
 //
 
-function App() {
-  
+// Username setup component for social login users
+function UsernameSetup({ user, onComplete }) {
+  const [username, setUsername] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const { user, authReady } = useAuth();
+  const validateUsername = (u) => {
+    const trimmed = (u || "").trim();
+    if (!trimmed) return "Username is required.";
+    if (trimmed.length < 3) return "Username must be at least 3 characters.";
+    if (trimmed.length > 20) return "Username must be 20 characters or less.";
+    if (!/^[a-zA-Z0-9_]+$/.test(trimmed)) {
+      return "Username can only use letters, numbers, and underscores.";
+    }
+    return "";
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    const msg = validateUsername(username);
+    if (msg) {
+      setError(msg);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await setDoc(doc(db, "users", user.uid), {
+        username: username.trim(),
+        email: user.email || "",
+        createdAt: new Date().toISOString(),
+        provider: user.providerData?.[0]?.providerId || "social",
+      });
+      onComplete();
+    } catch (err) {
+      setError(err?.message || "Failed to save username.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="username-setup">
+      <div className="username-setup-container">
+        <h1 className="username-setup-logo">SLIPROOMS</h1>
+        <p className="username-setup-tagline">one last thing...</p>
+
+        <form onSubmit={handleSubmit} className="username-setup-form">
+          <p className="username-setup-prompt">Choose a username for the chat rooms</p>
+
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Username"
+            disabled={loading}
+            className="username-setup-input"
+            autoFocus
+          />
+
+          {error && <div className="username-setup-error">{error}</div>}
+
+          <button type="submit" disabled={loading} className="username-setup-btn">
+            {loading ? "Saving..." : "Enter the Room"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const { user, userProfile, authReady, needsUsername, refreshProfile } = useAuth();
+  const navigate = useNavigate();
+
+  // ESPN games hook
+  const { gamesBySport, loading: gamesLoading, getGameById, refresh: refreshGames } = useGames();
+
+  // All hooks must be called unconditionally at the top
+  const [markets, setMarkets] = useState(initialMarkets);
+  const [activeMarketId, setActiveMarketId] = useState(initialMarkets[0].id);
+  const [activeRoomId, setActiveRoomId] = useState(null);
+  const [newMessage, setNewMessage] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  // Create room modal state
+  const [showCreateRoom, setShowCreateRoom] = useState(false);
+  const [selectedGameId, setSelectedGameId] = useState(null);
+  const [roomBetName, setRoomBetName] = useState("");
+  const [roomOdds, setRoomOdds] = useState("");
+
+  // Slip status (live game tracking for current room)
+  const [isLiveExpanded, setIsLiveExpanded] = useState(true);
+
+  // profile state - will be updated when userProfile loads
+  const [profile, setProfile] = useState(defaultProfile);
+  const [draftProfile, setDraftProfile] = useState(defaultProfile);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [showAvatarChoices, setShowAvatarChoices] = useState(true);
+
+  // for soft fade transitions on room change
+  const [fadeKey, setFadeKey] = useState(0);
+
+  // Real-time messages from Firestore
+  const [liveMessages, setLiveMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
+  // TOP SWEAT banner state (for transition effects)
+  const [displayedTopSweat, setDisplayedTopSweat] = useState(null);
+  const [topSweatPhase, setTopSweatPhase] = useState("idle"); // "idle" | "fading-out" | "pause" | "fading-in"
+  const [allRooms, setAllRooms] = useState([]); // All rooms across all sports for TOP SWEAT
+
+  // refs for smart auto-scroll
+  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+
+  // Compute these early so useEffects can use them
+  const activeMarket = markets.find((m) => m.id === activeMarketId) || markets[0];
+  const activeRoom = activeRoomId ? activeMarket.rooms.find((r) => r.id === activeRoomId) : null;
+  // Use live messages from Firestore instead of local state
+  const activeMessages = liveMessages;
+
+  // Auto scroll effect
+  useEffect(() => {
+    if (!user || !activeRoom) return;
+    const el = messagesContainerRef.current;
+    const isNearBottom = !el || el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
+    if (isNearBottom && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [activeRoomId, activeMessages.length, user, activeRoom]);
+
+  // Load username from Firestore profile
+  useEffect(() => {
+    if (userProfile?.username) {
+      setProfile((prev) => ({ ...prev, displayName: userProfile.username }));
+      setDraftProfile((prev) => ({ ...prev, displayName: userProfile.username }));
+    }
+  }, [userProfile]);
+
+  // Subscribe to real-time messages when room changes
+  useEffect(() => {
+    if (!activeRoomId || !user) {
+      setLiveMessages([]);
+      return;
+    }
+
+    setMessagesLoading(true);
+
+    // Subscribe to messages - this returns an unsubscribe function
+    const unsubscribe = subscribeToMessages(activeRoomId, (messages) => {
+      setLiveMessages(messages);
+      setMessagesLoading(false);
+    });
+
+    // Cleanup: unsubscribe when room changes or component unmounts
+    return () => {
+      unsubscribe();
+    };
+  }, [activeRoomId, user]);
+
+  // Subscribe to ALL rooms for TOP SWEAT tracking + sync user counts to sidebar
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubscribe = subscribeToAllRooms((rooms) => {
+      setAllRooms(rooms);
+
+      // Also sync userCount to markets for sidebar display
+      setMarkets((prev) =>
+        prev.map((market) => ({
+          ...market,
+          rooms: market.rooms.map((room) => {
+            const liveRoom = rooms.find((r) => r.id === room.id);
+            return liveRoom
+              ? { ...room, userCount: liveRoom.userCount || 0 }
+              : room;
+          }),
+        }))
+      );
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Track user presence when joining/leaving rooms
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    // Join the new room
+    if (activeRoomId) {
+      joinRoom(activeRoomId, user.uid);
+    }
+
+    // Cleanup: leave the room when switching or unmounting
+    return () => {
+      if (activeRoomId) {
+        leaveRoom(activeRoomId, user.uid);
+      }
+    };
+  }, [activeRoomId, user?.uid]);
+
+  // Load rooms from Firestore when sport tab changes
+  useEffect(() => {
+    if (!user) return;
+
+    const loadRooms = async () => {
+      try {
+        const firestoreRooms = await getRoomsBySport(activeMarketId);
+        setMarkets((prev) =>
+          prev.map((market) =>
+            market.id !== activeMarketId
+              ? market
+              : { ...market, rooms: firestoreRooms }
+          )
+        );
+      } catch (err) {
+        console.error("Failed to load rooms:", err);
+      }
+    };
+
+    loadRooms();
+  }, [activeMarketId, user]);
+
+  // Calculate TOP SWEAT - room with most users across ALL sports
+  // Uses allRooms from real-time subscription for accurate userCount
+  const topSweatRoom = (() => {
+    let topRoom = null;
+    let topCount = 0;
+
+    // Use allRooms from real-time subscription (has live userCount data)
+    allRooms.forEach((room) => {
+      const count = room.userCount || 0;
+      // Room with most users wins - even 1 user beats 0
+      if (count > topCount) {
+        topCount = count;
+        topRoom = room;
+      }
+    });
+
+    // Return the top room if it has at least 1 user
+    return topRoom && topCount >= 1 ? { ...topRoom, marketId: topRoom.sportId } : null;
+  })();
+
+  // Refs for managing TOP SWEAT transitions without getting cancelled
+  const transitionTimeoutRef = useRef(null);
+  const lastTopSweatIdRef = useRef(null);
+
+  // Handle TOP SWEAT - show the room with most users, animate only on room CHANGE
+  useEffect(() => {
+    if (!user) return;
+
+    // No room with users - keep showing whatever we have (don't clear)
+    if (!topSweatRoom) return;
+
+    const currentTopId = topSweatRoom.id;
+
+    // First time ever OR same room - just show/update immediately
+    if (!lastTopSweatIdRef.current || currentTopId === lastTopSweatIdRef.current) {
+      lastTopSweatIdRef.current = currentTopId;
+      setDisplayedTopSweat(topSweatRoom);
+      setTopSweatPhase("idle");
+      return;
+    }
+
+    // DIFFERENT room is taking the crown - do the dramatic transition
+    // Clear any existing transition
+    if (transitionTimeoutRef.current) {
+      clearTimeout(transitionTimeoutRef.current);
+    }
+
+    // Capture the new room for the transition (avoid stale closure)
+    const newTopRoom = { ...topSweatRoom };
+    lastTopSweatIdRef.current = currentTopId;
+
+    // Phase 1: Fade out current king
+    setTopSweatPhase("fading-out");
+
+    transitionTimeoutRef.current = setTimeout(() => {
+      // Phase 2: Pause (tension builds)
+      setTopSweatPhase("pause");
+
+      transitionTimeoutRef.current = setTimeout(() => {
+        // Phase 3: Fade in new king
+        setDisplayedTopSweat(newTopRoom);
+        setTopSweatPhase("fading-in");
+
+        transitionTimeoutRef.current = setTimeout(() => {
+          setTopSweatPhase("idle");
+          transitionTimeoutRef.current = null;
+        }, 1200);
+      }, 800);
+    }, 1000);
+
+  }, [topSweatRoom?.id, user]);
+
+  // Update displayed data when same room's user count changes (no animation)
+  useEffect(() => {
+    if (!topSweatRoom) return;
+    if (topSweatRoom.id === displayedTopSweat?.id && topSweatPhase === "idle") {
+      setDisplayedTopSweat(topSweatRoom);
+    }
+  }, [topSweatRoom?.userCount]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // ------------------- EARLY RETURNS (after all hooks) -------------------
 
   if (!authReady) {
     return <div style={{ color: "white", padding: 20 }}>Loading...</div>;
@@ -346,85 +394,102 @@ function App() {
     return <AuthPage />;
   }
 
-  const [markets, setMarkets] = useState(initialMarkets);
-  const [activeMarketId, setActiveMarketId] = useState(initialMarkets[0].id);
-  const [activeRoomId, setActiveRoomId] = useState(
-    initialMarkets[0].rooms[0].id
-  );
+  // User is logged in but needs to create a username (social login)
+  if (needsUsername) {
+    return <UsernameSetup user={user} onComplete={refreshProfile} />;
+  }
 
+  // ------------------- COMPUTED VALUES -------------------
 
-  const [newMessage, setNewMessage] = useState("");
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  // Get games for current sport tab
+  const currentGames = gamesBySport[activeMarketId] || [];
 
-  // profile state
-  const [profile, setProfile] = useState(defaultProfile);
-  const [draftProfile, setDraftProfile] = useState(defaultProfile);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [showAvatarChoices, setShowAvatarChoices] = useState(true);
-  const [isLiveExpanded, setIsLiveExpanded] = useState(false);
+  // Get live game data for active room (for SLIP STATUS)
+  const activeGameId = activeRoom?.gameId;
+  const liveGame = activeGameId ? getGameById(activeGameId) : null;
 
+  // ------------------- HANDLER FUNCTIONS -------------------
 
-  // live game + sweat feed (right panel)
-  const [liveGame, setLiveGame] = useState(() =>
-    createInitialLiveGame(initialMarkets[0].id, initialMarkets[0].rooms[0])
-  );
-  const [sweatFeed, setSweatFeed] = useState([]);
+  // Create room from a selected game
+  const handleCreateRoom = async () => {
+    if (!selectedGameId || !roomBetName.trim()) return;
 
-  // for soft fade transitions on room change
-  const [fadeKey, setFadeKey] = useState(0);
+    const game = getGameById(selectedGameId);
+    if (!game) return;
 
-  // refs for smart auto-scroll
-  const messagesEndRef = useRef(null);
-  const messagesContainerRef = useRef(null);
+    const newRoom = {
+      id: `room-${Date.now()}`,
+      gameId: selectedGameId,
+      name: roomBetName.trim(),
+      game: game.shortName,
+      odds: roomOdds.trim() || "N/A",
+      sportId: activeMarketId,
+      createdBy: user?.uid || "anonymous",
+    };
 
-  const activeMarket =
-    markets.find((m) => m.id === activeMarketId) || markets[0];
-  const activeRoom =
-    activeMarket.rooms.find((r) => r.id === activeRoomId) ||
-    activeMarket.rooms[0];
+    try {
+      // Save to Firestore
+      await createRoomInFirestore(newRoom);
 
-  const activeMessages = activeRoom?.messages || [];
+      // Add to local state
+      setMarkets((prev) =>
+        prev.map((market) =>
+          market.id !== activeMarketId
+            ? market
+            : { ...market, rooms: [...market.rooms, newRoom] }
+        )
+      );
 
-  const progressPercent =
-    (activeRoom.legsHit / activeRoom.totalLegs) * 100 || 0;
+      // Select the new room
+      setActiveRoomId(newRoom.id);
 
-  //
-  // ------------------- SEND MESSAGE -------------------
-  //
+      // Award XP for creating a room
+      if (user?.uid) {
+        awardXP(user.uid, XP_REWARDS.CREATE_ROOM, "create_room").catch((err) =>
+          console.error("XP award failed:", err)
+        );
+      }
 
-  const handleSendMessage = () => {
+      // Reset modal
+      setShowCreateRoom(false);
+      setSelectedGameId(null);
+      setRoomBetName("");
+      setRoomOdds("");
+    } catch (err) {
+      console.error("Failed to create room:", err);
+    }
+  };
+
+  const handleSendMessage = async () => {
     const text = newMessage.trim();
-    if (!text) return;
+    if (!text || !activeRoomId) return;
 
     const username = (profile.displayName || "Guest").trim() || "Guest";
 
-    const newMsg = {
-      id: Date.now(),
-      user: username,
-      text,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMarkets((prev) =>
-      prev.map((market) =>
-        market.id !== activeMarketId
-          ? market
-          : {
-              ...market,
-              rooms: market.rooms.map((room) =>
-                room.id !== activeRoomId
-                  ? room
-                  : {
-                      ...room,
-                      messages: [...room.messages, newMsg],
-                    }
-              ),
-            }
-      )
-    );
-
+    // Clear input immediately for responsiveness
     setNewMessage("");
     setShowEmojiPicker(false);
+
+    try {
+      // Send to Firestore - real-time listener will update the UI
+      await sendMessageToFirestore(activeRoomId, {
+        username,
+        text,
+        oddie: profile.avatarEmoji, // User's emoji/avatar
+        userId: user?.uid || null,
+      });
+
+      // Award XP for sending message (includes daily bonus check)
+      if (user?.uid) {
+        awardMessageXP(user.uid).catch((err) =>
+          console.error("XP award failed:", err)
+        );
+      }
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      // Restore message on error
+      setNewMessage(text);
+    }
   };
 
   const handleKeyDown = (event) => {
@@ -434,17 +499,9 @@ function App() {
     }
   };
 
-  //
-  // ------------------- EMOJI ADD -------------------
-  //
-
   const handleAddEmoji = (emoji) => {
     setNewMessage((prev) => prev + emoji);
   };
-
-  //
-  // ------------------- MARKET / ROOM SWITCH -------------------
-  //
 
   const handleMarketChange = (marketId) => {
     setFadeKey(Date.now());
@@ -461,175 +518,64 @@ function App() {
     setActiveRoomId(roomId);
   };
 
-  //
-  // ------------------- FAKE CHATTER (MODE B: ACTIVE + READABLE) -------------------
-  //   - faster cadence
-  //   - always at least 1 msg
-  //   - occasional 2–3 msg burst
-  //   - light personality variation (caps/emoji)
-  //
+  const handleDeleteRoom = async (e, roomId) => {
+    e.stopPropagation(); // Prevent room selection when clicking delete
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setMarkets((prev) => {
-        const marketForRoom = prev.find((m) => m.id === activeMarketId);
-        if (!marketForRoom) return prev;
+    // Remove from local state immediately for responsiveness
+    setMarkets((prev) =>
+      prev.map((market) =>
+        market.id !== activeMarketId
+          ? market
+          : { ...market, rooms: market.rooms.filter((r) => r.id !== roomId) }
+      )
+    );
 
-        const roomForChat = marketForRoom.rooms.find((r) => r.id === activeRoomId);
-        if (!roomForChat) return prev;
+    // If we deleted the active room, clear selection
+    if (activeRoomId === roomId) {
+      setActiveRoomId(null);
+    }
 
-        // scale activity gently with room size
-        const activityFactor = Math.min(1, roomForChat.userCount / 220);
+    // Delete from Firestore
+    try {
+      await deleteRoomFromFirestore(roomId);
+    } catch (err) {
+      console.error("Failed to delete room from Firestore:", err);
+    }
+  };
 
-        // readable bursts: 1 always, sometimes 2, rarely 3
-        const burstCount =
-          1 +
-          (Math.random() < 0.38 ? 1 : 0) +
-          (Math.random() < activityFactor * 0.22 ? 1 : 0);
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("Logout failed:", err);
+    }
+  };
 
-        const newMessages = Array.from({ length: burstCount }).map(() => {
-          const persona = fakeChatUsers[Math.floor(Math.random() * fakeChatUsers.length)];
-          const template = fakeChatMessages[Math.floor(Math.random() * fakeChatMessages.length)];
+  // Navigate to TOP SWEAT room
+  const handleTopSweatClick = () => {
+    if (!displayedTopSweat) return;
 
-          // small style spice (readable, not spammy)
-          let text = template;
-          if (Math.random() < 0.18) text = text.toUpperCase();
-          if (Math.random() < 0.22) text += " 🔥";
-          if (Math.random() < 0.12) {
-            const prefix = emojiOptions[Math.floor(Math.random() * emojiOptions.length)];
-            text = `${prefix} ${text}`;
-          }
+    // Switch to the correct sport tab
+    if (displayedTopSweat.marketId !== activeMarketId) {
+      setActiveMarketId(displayedTopSweat.marketId);
+    }
 
-          return {
-            id: Date.now() + Math.random(),
-            user: persona.name,
-            text,
-            timestamp: new Date().toISOString(),
-          };
-        });
-
-        return prev.map((market) =>
-          market.id !== activeMarketId
-            ? market
-            : {
-                ...market,
-                rooms: market.rooms.map((room) =>
-                  room.id !== activeRoomId
-                    ? room
-                    : {
-                        ...room,
-                        messages: [...room.messages, ...newMessages],
-                      }
-                ),
-              }
-        );
-      });
-    }, 2200); // Mode B cadence
-
-    return () => clearInterval(interval);
-  }, [activeMarketId, activeRoomId]);
-
-  //
-  // ------------------- USER COUNT FLUCTUATION + ROOM SORTING -------------------
-  //
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setMarkets((prev) =>
-        prev.map((market) => {
-          const updatedRooms = market.rooms
-            .map((room) => ({
-              ...room,
-              userCount: Math.max(
-                1,
-                room.userCount + (Math.floor(Math.random() * 50) - 25)
-              ),
-            }))
-            .sort((a, b) => b.userCount - a.userCount);
-
-          if (market.id === activeMarketId) {
-            const stillExists = updatedRooms.find((r) => r.id === activeRoomId);
-            if (!stillExists && updatedRooms[0]) {
-              setActiveRoomId(updatedRooms[0].id);
-            }
-          }
-
-          return { ...market, rooms: updatedRooms };
-        })
-      );
-    }, 6000);
-
-    return () => clearInterval(interval);
-  }, [activeMarketId, activeRoomId]);
-
-  //
-  // ------------------- LIVE GAME INIT + SWEAT FEED SEED -------------------
-  //
-
-  useEffect(() => {
-    // reset live game when market/room changes
-    setLiveGame(createInitialLiveGame(activeMarketId, activeRoom));
-
-    // seed sweat feed with a few fake messages
-    const seed = Array.from({ length: 3 }).map(() => {
-      const user =
-        fakeSweatUsers[Math.floor(Math.random() * fakeSweatUsers.length)];
-      const text =
-        sweatMessages[Math.floor(Math.random() * sweatMessages.length)];
-      return {
-        id: Date.now() + Math.random(),
-        user,
-        text,
-        timestamp: new Date().toISOString(),
-      };
-    });
-    setSweatFeed(seed);
-  }, [activeMarketId, activeRoomId, activeRoom]);
-
-  //
-  // ------------------- LIVE GAME TICKER -------------------
-  //
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveGame((prev) => tickLiveGame(prev));
-    }, 13000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  //
-  // ------------------- SWEAT FEED TICK -------------------
-  //
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const user =
-        fakeSweatUsers[Math.floor(Math.random() * fakeSweatUsers.length)];
-      const text =
-        sweatMessages[Math.floor(Math.random() * sweatMessages.length)];
-
-      const msg = {
-        id: Date.now() + Math.random(),
-        user,
-        text,
-        timestamp: new Date().toISOString(),
-      };
-
-      setSweatFeed((prev) => {
-        const next = [msg, ...prev];
-        return next.slice(0, 20);
-      });
-    }, 15000 + Math.random() * 8000);
-
-    return () => clearInterval(interval);
-  }, [activeRoomId]);
+    // Select the room
+    setFadeKey(Date.now());
+    setActiveRoomId(displayedTopSweat.id);
+  };
 
   //
   // ------------------- PROFILE HANDLERS -------------------
   //
 
   const openProfile = () => {
+    // Navigate to the new profile page instead of opening the old sheet
+    navigate("/profile");
+  };
+
+  // Legacy profile sheet opener (keep for backward compatibility)
+  const openProfileSheet = () => {
     setDraftProfile(profile);
     setShowAvatarChoices(true);
     setIsProfileOpen(true);
@@ -656,84 +602,17 @@ function App() {
   };
 
   //
-  // ------------------- LEADERBOARD / TOP ROOM -------------------
+  // ------------------- CHAT UTILS -------------------
   //
 
-  const topSweaters = [
-    {
-      name: "SlipKing89",
-      emoji: "🔥",
-      msgs: 2,
-      hitRate: "62% HR",
-      streak: "4x streak",
-    },
-    {
-      name: "EVNerd",
-      emoji: "🧠",
-      msgs: 2,
-      hitRate: "64% HR",
-      streak: "5x streak",
-    },
-    {
-      name: "BadBeatBilly",
-      emoji: "💀",
-      msgs: 2,
-      hitRate: "48% HR",
-      streak: "1x streak",
-    },
-    {
-      name: "TeaserTom",
-      emoji: "🧵",
-      msgs: 2,
-      hitRate: "59% HR",
-      streak: "3x streak",
-    },
-  ];
-
-  const youSweater = {
-    name: profile.displayName || "You",
-    emoji: profile.avatarEmoji || "🔥",
-    msgs: 1,
-    hitRate: "58% HR",
-    streak: "2x streak",
-    isYou: true,
+  // Navigate to user's profile when clicking their name in chat
+  const handleUsernameClick = (userId) => {
+    if (userId) {
+      navigate(`/profile/${userId}`);
+    }
   };
-
-  const allSweaters = [...topSweaters, youSweater];
-
-  const allRoomsFlat = markets.flatMap((m) =>
-    m.rooms.map((room) => ({ ...room, marketLabel: m.label }))
-  );
-  const topRoom = allRoomsFlat.reduce((best, room) => {
-    if (!best) return room;
-    return room.userCount > best.userCount ? room : best;
-  }, null);
-
-  const topRoomProgress = topRoom ? 10 + (topRoom.userCount % 70) : 0;
-
-  //
-  // ------------------- CHAT UTILS (TYPING, GROUPING, SCROLL) -------------------
-  //
 
   const isTyping = newMessage.trim().length > 0;
-
-  const winProbTeamName =
-    liveGame.winProbTeam === "home" ? liveGame.homeTeam : liveGame.awayTeam;
-
-  const isNearBottom = () => {
-    const el = messagesContainerRef.current;
-    if (!el) return true;
-    return el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
-  };
-
-  // smart auto scroll: only if user is already near bottom
-  useEffect(() => {
-    if (isNearBottom()) {
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-      }
-    }
-  }, [activeRoomId, activeMessages.length]);
 
   // group consecutive messages from same user
   const groupMessages = (msgs) => {
@@ -742,10 +621,14 @@ function App() {
 
     msgs.forEach((msg) => {
       const time = formatTime(msg.timestamp);
-      if (!current || current.user !== msg.user) {
+      const msgUser = msg.username || msg.user || "Anonymous"; // Handle both Firestore and legacy
+      const msgUserId = msg.userId || null;
+      if (!current || current.user !== msgUser) {
         current = {
-          user: msg.user,
+          user: msgUser,
+          userId: msgUserId, // Include userId for clickable usernames
           time,
+          oddie: msg.oddie, // User's emoji
           messages: [],
         };
         groups.push(current);
@@ -760,8 +643,58 @@ function App() {
   // ------------------- UI -------------------
   //
 
-return (
-  <div className="app">
+  // Main chat room content
+  const mainAppContent = (
+    <div className="app">
+    {/* TOP SWEAT BANNER - King of the Hill */}
+    <div
+      className={`top-sweat-banner ${topSweatPhase}`}
+      onClick={handleTopSweatClick}
+      role="button"
+      tabIndex={displayedTopSweat ? 0 : -1}
+    >
+      {/* Matrix rain background effect */}
+      <div className="matrix-rain" aria-hidden="true">
+        {Array.from({ length: 50 }).map((_, i) => (
+          <span
+            key={i}
+            className="matrix-char"
+            style={{
+              left: `${(i * 2) % 100}%`,
+              animationDelay: `${(i * 0.3) % 5}s`,
+              animationDuration: `${3 + (i % 4)}s`,
+            }}
+          >
+            {String.fromCharCode(0x30A0 + Math.floor(Math.random() * 96))}
+          </span>
+        ))}
+      </div>
+
+      {/* Banner content */}
+      <div className="top-sweat-content">
+        {displayedTopSweat ? (
+          <>
+            <span className="top-sweat-crown">👑</span>
+            <span className="top-sweat-label">TOP SWEAT</span>
+            <span className="top-sweat-divider">·</span>
+            <span className="top-sweat-room">{displayedTopSweat.name}</span>
+            <span className="top-sweat-divider">·</span>
+            <span className="top-sweat-game">{displayedTopSweat.game}</span>
+            <span className="top-sweat-divider">·</span>
+            <span className="top-sweat-odds">{displayedTopSweat.odds}</span>
+            <span className="top-sweat-divider">·</span>
+            <span className="top-sweat-users">
+              {displayedTopSweat.userCount || 0} sweating
+            </span>
+          </>
+        ) : topSweatPhase === "pause" ? (
+          <span className="top-sweat-empty">...</span>
+        ) : (
+          <span className="top-sweat-waiting">Waiting for the first king...</span>
+        )}
+      </div>
+    </div>
+
     <header className="app-header">
       <div className="brand-row">
         <h1>
@@ -777,28 +710,13 @@ return (
           </span>
           <span className="profile-pill-name">{profile.displayName}</span>
         </button>
+        <button type="button" className="logout-btn" onClick={handleLogout}>
+          Logout
+        </button>
       </div>
 
-      {topRoom && (
-        <div className="top-room-banner top-room-banner-active">
-          <div className="top-room-banner-left">
-            <span className="top-room-banner-label">Top sweat right now</span>
-            <span className="top-room-banner-title">{topRoom.name}</span>
-            <span className="top-room-banner-sub">
-              {topRoom.game} · {topRoom.odds}
-            </span>
-          </div>
-          <div className="top-room-banner-right">
-            <span className="top-room-banner-progress">{topRoomProgress}%</span>
-            <span className="top-room-banner-users">
-              {topRoom.userCount} in room
-            </span>
-          </div>
-        </div>
-      )}
-
       <p>
-        Discord-style chat where every room sweats the exact same straight bet.
+        Live chat rooms for sweating bets together.
       </p>
     </header>
 
@@ -821,88 +739,110 @@ return (
           ))}
         </div>
 
-        <h2>Rooms</h2>
-        <ul className="rooms-list">
-          {activeMarket.rooms.map((room) => {
-            const isActive = room.id === activeRoomId;
-            return (
-              <li
-                key={room.id}
-                className={isActive ? "room active" : "room"}
-                onClick={() => handleRoomSelect(room.id)}
-              >
-                <div className="room-name">{room.name}</div>
-                <div className="room-game">{room.game}</div>
-                <div className="room-odds">{room.odds}</div>
-                <div className="room-users">{room.userCount} users</div>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="rooms-header">
+          <h2>Rooms</h2>
+          <button
+            type="button"
+            className="create-room-btn"
+            onClick={() => setShowCreateRoom(true)}
+            disabled={currentGames.length === 0}
+          >
+            + Create
+          </button>
+        </div>
+        {activeMarket.rooms.length === 0 ? (
+          <div className="empty-rooms">
+            <p>No active rooms</p>
+            <p className="empty-rooms-sub">
+              {gamesLoading
+                ? "Loading games..."
+                : currentGames.length > 0
+                ? `${currentGames.length} games available - create a room!`
+                : "No games scheduled today"}
+            </p>
+          </div>
+        ) : (
+          <ul className="rooms-list">
+            {activeMarket.rooms.map((room) => {
+              const isActive = room.id === activeRoomId;
+              return (
+                <li
+                  key={room.id}
+                  className={isActive ? "room active" : "room"}
+                  onClick={() => handleRoomSelect(room.id)}
+                >
+                  <div className="room-info">
+                    <div className="room-name">{room.name}</div>
+                    <div className="room-game">{room.game}</div>
+                    <div className="room-odds">{room.odds}</div>
+                    <div className="room-users">
+                      {room.userCount || 0} {(room.userCount || 0) === 1 ? "user" : "users"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="room-delete-btn"
+                    onClick={(e) => handleDeleteRoom(e, room.id)}
+                    title="Delete room"
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </aside>
 
       {/* Chat */}
       <main className="chat">
-        <div className="chat-top">
-          <div className="chat-header">
-            <div className="chat-header-top">
-              <h2>{activeRoom.name}</h2>
-              <span className="chat-tag">Straight · 1-leg</span>
-            </div>
-            <p>
-              Game: <span className="highlight">{activeRoom.game}</span> · Odds:{" "}
-              <span className="highlight">{activeRoom.odds}</span>
-            </p>
+        {!activeRoom ? (
+          <div className="empty-chat">
+            <h2>No room selected</h2>
+            <p>Select a room from the sidebar to start chatting</p>
           </div>
-
-          <div className="live-game-wp-label">
-            Win probability{" "}
-            <span className="live-game-wp-value">
-              {Math.round(liveGame.winProb)}%
-            </span>{" "}
-            <span className="live-game-wp-team">
-              {winProbTeamName}
-            </span>
-          </div>
-
-          <div className="live-game-wp-bar">
-            <div
-              className={
-                "live-game-wp-fill " +
-                (liveGame.winProbTeam === "home"
-                  ? "live-game-wp-fill-home"
-                  : "live-game-wp-fill-away")
-              }
-              style={{ width: `${liveGame.winProb}%` }}
-            />
-          </div>
-        </div>
-
-          <div
-            key={fadeKey}
-            className="messages fade-chat"
-            ref={messagesContainerRef}
-          >
-            {groupMessages(activeMessages).map((cluster, index) => (
-              <div key={index} className="message-cluster">
-                <div className="message-header">
-                  <span className="message-user">{cluster.user}</span>
-                  <span className="message-timestamp">{cluster.time}</span>
+        ) : (
+          <>
+            <div className="chat-top">
+              <div className="chat-header">
+                <div className="chat-header-top">
+                  <h2>{activeRoom.name}</h2>
+                  <span className="chat-tag">Straight · 1-leg</span>
                 </div>
+                <p>
+                  Game: <span className="highlight">{activeRoom.game}</span> · Odds:{" "}
+                  <span className="highlight">{activeRoom.odds}</span>
+                </p>
+              </div>
+            </div>
 
-                {cluster.messages.map((msg) => {
-                  const extraClasses =
-                    (msg.isSystem ? " message-system" : "") +
-                    (msg.user === "Crowd" ? " message-crowd" : "");
-                  return (
-                    <div
-                      key={msg.id}
-                      className={"message message-bubble" + extraClasses}
+            <div
+              key={fadeKey}
+              className="messages fade-chat"
+              ref={messagesContainerRef}
+            >
+              {groupMessages(activeMessages).map((cluster, index) => (
+                <div key={index} className="message-cluster">
+                  <div className="message-header">
+                    {cluster.oddie && (
+                      <span className="message-oddie">{cluster.oddie}</span>
+                    )}
+                    <span
+                      className={`message-user ${cluster.userId ? "clickable" : ""}`}
+                      onClick={() => cluster.userId && handleUsernameClick(cluster.userId)}
+                      role={cluster.userId ? "button" : undefined}
+                      tabIndex={cluster.userId ? 0 : undefined}
                     >
+                      {cluster.user}
+                    </span>
+                    <span className="message-timestamp">{cluster.time}</span>
+                  </div>
+
+                  {cluster.messages.map((msg) => (
+                    <div key={msg.id} className="message message-bubble">
                       <div className="message-text">{msg.text}</div>
                     </div>
-                  );
-                })}
+                  ))}
               </div>
             ))}
 
@@ -951,83 +891,217 @@ return (
               ))}
             </div>
           )}
-        </main>
-        {/* SLIP STATUS COLUMN */}
-<aside className="slip-status-column">
-  <div className="slip-status-inner">
-    {/* SLIP STATUS — COLLAPSIBLE LIVE GAME */}
-<div
-  className={
-    "live-game-collapsible" +
-    (isLiveExpanded ? " live-game-expanded" : " live-game-collapsed")
-  }
->
-  {/* Header / Toggle */}
-  <button
-    type="button"
-    className="live-game-toggle"
-    onClick={() => setIsLiveExpanded((v) => !v)}
-  >
-    <span className="live-game-toggle-label">
-      LIVE · {liveGame.awayTeam} {liveGame.awayScore}–{liveGame.homeScore}{" "}
-      {liveGame.homeTeam}
-    </span>
-    <span className="live-game-toggle-chevron">
-      {isLiveExpanded ? "▾" : "▸"}
-    </span>
-  </button>
-
-  {/* Expanded content */}
-  {isLiveExpanded && (
-    <section className="live-game-card live-game-card-inline">
-      <div className="live-game-header">
-        <span className="live-game-label">Slip status</span>
-        <span className="live-game-status">{liveGame.status}</span>
-      </div>
-
-      <div className="live-game-teams">
-        <div
-          className={
-            "live-game-team" +
-            (liveGame.possession === "away"
-              ? " live-game-team-active"
-              : "")
-          }
-        >
-          <div className="live-game-team-name">{liveGame.awayTeam}</div>
-          <div className="live-game-score">{liveGame.awayScore}</div>
-        </div>
-
-        <div
-          className={
-            "live-game-team" +
-            (liveGame.possession === "home"
-              ? " live-game-team-active"
-              : "")
-          }
-        >
-          <div className="live-game-team-name">{liveGame.homeTeam}</div>
-          <div className="live-game-score">{liveGame.homeScore}</div>
-        </div>
-      </div>
-
-      <div className="live-game-meta">
-        <span>{liveGame.period}</span>
-        {!liveGame.period.includes("th") && liveGame.clock && (
-          <>
-            <span>·</span>
-            <span>{liveGame.clock}</span>
           </>
         )}
-      </div>
-    </section>
-  )}
-</div>
-  </div>
-</aside>
+      </main>
 
-        
+      {/* LIVE GAMES PANEL */}
+      <aside className="live-games-panel">
+        <div className="live-games-header">
+          <h2>Live Games</h2>
+          <button type="button" className="refresh-btn" onClick={refreshGames}>
+            Refresh
+          </button>
+        </div>
+
+        {/* Featured Game - Current Room's Game */}
+        {liveGame && (
+          <div className="featured-game">
+            <div className="featured-game-label">Current Room</div>
+            <div className="featured-game-teams">
+              <div className="featured-game-team">
+                {liveGame.awayTeam?.logo && (
+                  <img
+                    src={liveGame.awayTeam.logo}
+                    alt={liveGame.awayTeam.name}
+                    className="featured-game-logo"
+                  />
+                )}
+                <div className="featured-game-name">{liveGame.awayTeam?.name}</div>
+                <div className="featured-game-score">{liveGame.awayTeam?.score}</div>
+              </div>
+              <div className="featured-game-team">
+                {liveGame.homeTeam?.logo && (
+                  <img
+                    src={liveGame.homeTeam.logo}
+                    alt={liveGame.homeTeam.name}
+                    className="featured-game-logo"
+                  />
+                )}
+                <div className="featured-game-name">{liveGame.homeTeam?.name}</div>
+                <div className="featured-game-score">{liveGame.homeTeam?.score}</div>
+              </div>
+            </div>
+            <div className={"featured-game-status" + (liveGame.isLive ? " is-live" : "")}>
+              {liveGame.isLive && (
+                <>
+                  <span>{getPeriodLabel(activeMarketId, liveGame.status.period)}</span>
+                  {liveGame.status.clock && <span>·</span>}
+                  {liveGame.status.clock && <span>{liveGame.status.clock}</span>}
+                </>
+              )}
+              {!liveGame.isLive && (
+                <span>{liveGame.status.detail || liveGame.status.description}</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Other Games */}
+        <div className="other-games-label">
+          {activeMarket.label} Games Today
+        </div>
+        <div className="games-list">
+          {currentGames.length === 0 ? (
+            <div className="no-games">No games scheduled</div>
+          ) : (
+            currentGames
+              .filter((g) => g.id !== activeGameId)
+              .map((game) => (
+                <div key={game.id} className="game-card">
+                  <div className="game-card-row">
+                    <div className="game-card-team">
+                      {game.awayTeam?.logo && (
+                        <img
+                          src={game.awayTeam.logo}
+                          alt={game.awayTeam.abbreviation}
+                          className="game-card-logo"
+                        />
+                      )}
+                      <span className="game-card-abbr">{game.awayTeam?.abbreviation}</span>
+                    </div>
+                    <span className="game-card-score">{game.awayTeam?.score}</span>
+                    <span className={"game-card-status" + (game.isLive ? " is-live" : "")}>
+                      {game.isLive
+                        ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
+                        : game.isFinal
+                        ? "Final"
+                        : new Date(game.date).toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                    </span>
+                  </div>
+                  <div className="game-card-row">
+                    <div className="game-card-team">
+                      {game.homeTeam?.logo && (
+                        <img
+                          src={game.homeTeam.logo}
+                          alt={game.homeTeam.abbreviation}
+                          className="game-card-logo"
+                        />
+                      )}
+                      <span className="game-card-abbr">{game.homeTeam?.abbreviation}</span>
+                    </div>
+                    <span className="game-card-score">{game.homeTeam?.score}</span>
+                  </div>
+                </div>
+              ))
+          )}
+        </div>
+      </aside>
+    </div>
+
+    {/* CREATE ROOM MODAL */}
+    {showCreateRoom && (
+      <div
+        className="modal-overlay"
+        onClick={(e) => e.target === e.currentTarget && setShowCreateRoom(false)}
+      >
+        <div className="modal-content create-room-modal">
+          <h2>Create a Room</h2>
+          <p className="modal-subtitle">Select a game and name your bet</p>
+
+          <div className="game-select-list">
+            {currentGames.length === 0 ? (
+              <p className="no-games-msg">No games available for {activeMarket.label}</p>
+            ) : (
+              currentGames.map((game) => (
+                <button
+                  key={game.id}
+                  type="button"
+                  className={
+                    "game-select-item" +
+                    (selectedGameId === game.id ? " game-select-item-active" : "")
+                  }
+                  onClick={() => setSelectedGameId(game.id)}
+                >
+                  <div className="game-select-teams">
+                    <span>{game.awayTeam?.abbreviation}</span>
+                    <span className="game-select-at">@</span>
+                    <span>{game.homeTeam?.abbreviation}</span>
+                  </div>
+                  <div className="game-select-status">
+                    {game.isLive ? (
+                      <span className="game-live-badge">
+                        LIVE {game.awayTeam?.score}-{game.homeTeam?.score}
+                      </span>
+                    ) : game.isFinal ? (
+                      <span className="game-final-badge">
+                        FINAL {game.awayTeam?.score}-{game.homeTeam?.score}
+                      </span>
+                    ) : (
+                      <span className="game-time">
+                        {new Date(game.date).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+
+          {selectedGameId && (
+            <div className="create-room-form">
+              <label>
+                Bet Name
+                <input
+                  type="text"
+                  placeholder="e.g., Chiefs ML, Over 45.5"
+                  value={roomBetName}
+                  onChange={(e) => setRoomBetName(e.target.value)}
+                />
+              </label>
+              <label>
+                Odds (optional)
+                <input
+                  type="text"
+                  placeholder="e.g., -110, +150"
+                  value={roomOdds}
+                  onChange={(e) => setRoomOdds(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="modal-btn modal-btn-secondary"
+              onClick={() => {
+                setShowCreateRoom(false);
+                setSelectedGameId(null);
+                setRoomBetName("");
+                setRoomOdds("");
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="modal-btn modal-btn-primary"
+              onClick={handleCreateRoom}
+              disabled={!selectedGameId || !roomBetName.trim()}
+            >
+              Create Room
+            </button>
+          </div>
+        </div>
       </div>
+    )}
 
       {/* PROFILE SHEET */}
       {isProfileOpen && (
@@ -1264,6 +1338,15 @@ return (
         </div>
       )}
     </div>
+  );
+
+  // Return with Routes for navigation
+  return (
+    <Routes>
+      <Route path="/profile/:userId" element={<ProfilePage />} />
+      <Route path="/profile" element={<ProfilePage />} />
+      <Route path="/" element={mainAppContent} />
+    </Routes>
   );
 }
 

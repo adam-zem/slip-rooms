@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users collection
+    match /users/{userId} {
+      // Any authenticated user can read profiles (for viewing other users)
+      allow read: if request.auth != null;
+      // Users can only write their own profile
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Rooms collection - any authenticated user can read/create/update rooms
+    match /rooms/{roomId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null; // For userCount/presence tracking
+      allow delete: if request.auth != null; // For admin functionality
+
+      // Messages subcollection - any authenticated user can read/write messages
+      match /messages/{messageId} {
+        allow read: if request.auth != null;
+        allow create: if request.auth != null
+          && request.resource.data.username is string
+          && request.resource.data.text is string;
+      }
+    }
+
+    // Friend requests collection
+    match /friendRequests/{requestId} {
+      // Anyone can read friend requests (to check if already sent)
+      allow read: if request.auth != null;
+      // Only the sender can create a request
+      allow create: if request.auth != null
+        && request.resource.data.from == request.auth.uid;
+      // Both sender and recipient can delete/update (accept/decline)
+      allow update, delete: if request.auth != null;
+    }
+
+    // Friendships collection
+    match /friendships/{friendshipId} {
+      allow read: if request.auth != null;
+      // Only allow creating friendships where user is one of the parties
+      allow create: if request.auth != null;
+      // Only allow deleting if user is one of the parties
+      allow delete: if request.auth != null;
+    }
+
+    // Greatest Hits collection
+    match /greatestHits/{hitId} {
+      // Anyone can read greatest hits
+      allow read: if request.auth != null;
+      // Users can only create their own hits
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      // Users can only delete their own hits
+      allow delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+  }
+}
