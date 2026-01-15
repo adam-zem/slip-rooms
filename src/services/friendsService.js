@@ -163,6 +163,9 @@ export async function getPendingRequests(userId) {
       ...data,
       fromUsername: senderData.username || "Unknown",
       fromAvatar: senderData.avatarEmoji || "🔥",
+      fromProfilePic: senderData.profilePicture || null,
+      fromLevel: senderData.level || 1,
+      fromTitle: senderData.title || "Rookie",
     });
   }
 

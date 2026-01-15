@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Routes, Route, useNavigate } from "react-router-dom";
 import "./App.css";
 import { useAuth } from "./contexts/AuthContext";
@@ -8,6 +8,7 @@ import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./pages/AuthPage";
 import ProfilePage from "./pages/ProfilePage";
+import AdminPage from "./pages/AdminPage";
 import { useGames } from "./hooks/useGames";
 import { getPeriodLabel } from "./services/espnService";
 import { awardMessageXP, awardXP, XP_REWARDS } from "./services/xpService";
@@ -21,6 +22,16 @@ import {
   leaveRoom,
   subscribeToAllRooms,
 } from "./services/chatService";
+import { submitRoom } from "./services/roomSubmissionsService";
+import {
+  subscribeToConversations,
+  subscribeToMessages as subscribeToDMMessages,
+  subscribeToUnreadCount,
+  sendMessage as sendDM,
+  getOrCreateConversation,
+  markConversationAsRead,
+} from "./services/dmService";
+import { getFriends } from "./services/friendsService";
 
 
 
@@ -142,8 +153,116 @@ function UsernameSetup({ user, onComplete }) {
   );
 }
 
+// Room search component
+function RoomSearch({ allRooms, onSelectRoom, activeMarketId }) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const inputRef = useRef(null);
+  const dropdownRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target) &&
+        inputRef.current &&
+        !inputRef.current.contains(e.target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Filter and sort rooms based on query
+  const filteredRooms = useMemo(() => {
+    if (!query.trim()) return [];
+
+    const searchTerms = query.toLowerCase().trim().split(/\s+/);
+
+    return allRooms
+      .filter((room) => {
+        // Build searchable text from room properties
+        const searchableText = [
+          room.name || "",
+          room.game || "",
+          // Extract team names/abbreviations from game string (e.g., "NYK @ BOS")
+          ...(room.game || "").split(/[@vs\s]+/),
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        // All search terms must match somewhere in the searchable text
+        return searchTerms.every((term) => searchableText.includes(term));
+      })
+      .sort((a, b) => (b.userCount || 0) - (a.userCount || 0))
+      .slice(0, 10); // Limit to 10 results
+  }, [query, allRooms]);
+
+  const handleInputChange = (e) => {
+    setQuery(e.target.value);
+    setIsOpen(e.target.value.trim().length > 0);
+  };
+
+  const handleSelectRoom = (room) => {
+    onSelectRoom(room);
+    setQuery("");
+    setIsOpen(false);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Escape") {
+      setIsOpen(false);
+      setQuery("");
+    }
+  };
+
+  return (
+    <div className="room-search">
+      <input
+        ref={inputRef}
+        type="text"
+        className="room-search-input"
+        placeholder="Search rooms..."
+        value={query}
+        onChange={handleInputChange}
+        onFocus={() => query.trim() && setIsOpen(true)}
+        onKeyDown={handleKeyDown}
+      />
+      {isOpen && (
+        <div ref={dropdownRef} className="room-search-dropdown">
+          {filteredRooms.length === 0 ? (
+            <div className="room-search-empty">
+              No rooms found for "{query}"
+            </div>
+          ) : (
+            filteredRooms.map((room) => (
+              <button
+                key={room.id}
+                type="button"
+                className={`room-search-item ${room.sportId === activeMarketId ? "same-sport" : ""}`}
+                onClick={() => handleSelectRoom(room)}
+              >
+                <div className="room-search-item-info">
+                  <div className="room-search-item-name">{room.name}</div>
+                  <div className="room-search-item-game">{room.game}</div>
+                </div>
+                <div className="room-search-item-users">
+                  {room.userCount || 0} sweating
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
-  const { user, userProfile, authReady, needsUsername, refreshProfile } = useAuth();
+  const { user, userProfile, authReady, needsUsername, refreshProfile, isAdmin } = useAuth();
   const navigate = useNavigate();
 
   // ESPN games hook
@@ -156,11 +275,34 @@ function App() {
   const [newMessage, setNewMessage] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
-  // Create room modal state
+  // Create room modal state (for admins)
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [selectedGameId, setSelectedGameId] = useState(null);
   const [roomBetName, setRoomBetName] = useState("");
   const [roomOdds, setRoomOdds] = useState("");
+
+  // Submit room modal state (for non-admin users)
+  const [showSubmitRoom, setShowSubmitRoom] = useState(false);
+  const [submitSport, setSubmitSport] = useState("nfl");
+  const [submitGameId, setSubmitGameId] = useState(null);
+  const [submitProp, setSubmitProp] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+
+  // DM (Direct Message) state
+  const [showDMInbox, setShowDMInbox] = useState(false);
+  const [dmConversations, setDmConversations] = useState([]);
+  const [dmUnreadCount, setDmUnreadCount] = useState(0);
+  const [activeDMConversation, setActiveDMConversation] = useState(null);
+  const [dmMessages, setDmMessages] = useState([]);
+  const [dmInput, setDmInput] = useState("");
+  const [dmFriends, setDmFriends] = useState([]);
+  const [showNewDM, setShowNewDM] = useState(false);
+  const dmMessagesEndRef = useRef(null);
+
+  // Mobile navigation state
+  const [mobileView, setMobileView] = useState("rooms"); // "rooms" | "chat" | "games"
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   // Slip status (live game tracking for current room)
   const [isLiveExpanded, setIsLiveExpanded] = useState(true);
@@ -384,6 +526,82 @@ function App() {
     };
   }, []);
 
+  // ------------------- DM SUBSCRIPTIONS -------------------
+
+  // Subscribe to DM conversations and unread count
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubConversations = subscribeToConversations(user.uid, (conversations) => {
+      setDmConversations(conversations);
+    });
+
+    const unsubUnread = subscribeToUnreadCount(user.uid, (count) => {
+      setDmUnreadCount(count);
+    });
+
+    return () => {
+      unsubConversations();
+      unsubUnread();
+    };
+  }, [user?.uid]);
+
+  // Subscribe to messages when a conversation is active
+  useEffect(() => {
+    if (!activeDMConversation) {
+      setDmMessages([]);
+      return;
+    }
+
+    const unsubMessages = subscribeToDMMessages(activeDMConversation.id, (messages) => {
+      setDmMessages(messages);
+    });
+
+    // Mark as read when opening conversation
+    if (user?.uid) {
+      markConversationAsRead(activeDMConversation.id, user.uid);
+    }
+
+    return () => unsubMessages();
+  }, [activeDMConversation?.id, user?.uid]);
+
+  // Load friends list for new DM modal
+  useEffect(() => {
+    async function loadFriends() {
+      if (!user?.uid || !showNewDM) return;
+      try {
+        const friends = await getFriends(user.uid);
+        setDmFriends(friends);
+      } catch (err) {
+        console.error("Failed to load friends:", err);
+      }
+    }
+    loadFriends();
+  }, [user?.uid, showNewDM]);
+
+  // Auto-scroll DM messages to bottom
+  useEffect(() => {
+    if (dmMessagesEndRef.current) {
+      dmMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [dmMessages]);
+
+  // Handle window resize for mobile detection
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Switch to chat view when a room is selected on mobile
+  useEffect(() => {
+    if (isMobile && activeRoomId) {
+      setMobileView("chat");
+    }
+  }, [activeRoomId, isMobile]);
+
   // ------------------- EARLY RETURNS (after all hooks) -------------------
 
   if (!authReady) {
@@ -460,6 +678,128 @@ function App() {
     }
   };
 
+  // Submit room for approval (non-admin users)
+  const handleSubmitRoom = async () => {
+    if (!submitGameId || !submitProp.trim()) return;
+
+    const game = getGameById(submitGameId);
+    if (!game) return;
+
+    setSubmitting(true);
+    try {
+      await submitRoom({
+        oddie: profile.avatarEmoji,
+        oddiename: profile.displayName || "Guest",
+        oddieid: user?.uid || null,
+        sport: submitSport,
+        game: game.shortName,
+        gameId: submitGameId,
+        prop: submitProp.trim().toUpperCase(),
+      });
+
+      // Show success message
+      setSubmitSuccess(true);
+
+      // Reset form after delay
+      setTimeout(() => {
+        setShowSubmitRoom(false);
+        setSubmitSuccess(false);
+        setSubmitSport("nfl");
+        setSubmitGameId(null);
+        setSubmitProp("");
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to submit room:", err);
+      console.error("Error code:", err.code);
+      console.error("Error message:", err.message);
+      alert(`Failed to submit room: ${err.message || "Unknown error"}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Get games for submission modal sport
+  const submitGames = gamesBySport[submitSport] || [];
+
+  // ------------------- DM HANDLERS -------------------
+
+  // Open a conversation with a friend
+  const openDMWithFriend = async (friend) => {
+    try {
+      const conversation = await getOrCreateConversation(
+        user.uid,
+        friend.id,
+        { username: profile.displayName, avatarEmoji: profile.avatarEmoji, profilePicture: profile.profilePicture },
+        { username: friend.username, avatarEmoji: friend.avatarEmoji, profilePicture: friend.profilePicture }
+      );
+      setActiveDMConversation({
+        ...conversation,
+        otherUser: friend,
+      });
+      setShowNewDM(false);
+    } catch (err) {
+      console.error("Failed to open DM:", err);
+    }
+  };
+
+  // Open existing conversation
+  const openDMConversation = (conversation) => {
+    const otherUserId = conversation.participants.find((id) => id !== user.uid);
+    const otherUserData = conversation.participantData?.[otherUserId] || {};
+    setActiveDMConversation({
+      ...conversation,
+      otherUser: {
+        id: otherUserId,
+        ...otherUserData,
+      },
+    });
+  };
+
+  // Send a DM message
+  const handleSendDM = async () => {
+    const text = dmInput.trim();
+    if (!text || !activeDMConversation) return;
+
+    setDmInput("");
+    try {
+      await sendDM(activeDMConversation.id, user.uid, text);
+    } catch (err) {
+      console.error("Failed to send DM:", err);
+      setDmInput(text);
+    }
+  };
+
+  // Handle DM input key press
+  const handleDMKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendDM();
+    }
+  };
+
+  // Close DM chat and go back to inbox
+  const closeDMChat = () => {
+    setActiveDMConversation(null);
+    setDmMessages([]);
+    setDmInput("");
+  };
+
+  // Format DM timestamp
+  const formatDMTime = (date) => {
+    if (!date) return "";
+    const now = new Date();
+    const diff = now - date;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return "now";
+    if (minutes < 60) return `${minutes}m`;
+    if (hours < 24) return `${hours}h`;
+    if (days < 7) return `${days}d`;
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+
   const handleSendMessage = async () => {
     const text = newMessage.trim();
     if (!text || !activeRoomId) return;
@@ -516,6 +856,10 @@ function App() {
   const handleRoomSelect = (roomId) => {
     setFadeKey(Date.now());
     setActiveRoomId(roomId);
+    // On mobile, always switch to chat view when selecting a room (even if already selected)
+    if (isMobile) {
+      setMobileView("chat");
+    }
   };
 
   const handleDeleteRoom = async (e, roomId) => {
@@ -563,6 +907,18 @@ function App() {
     // Select the room
     setFadeKey(Date.now());
     setActiveRoomId(displayedTopSweat.id);
+  };
+
+  // Handle room selection from search
+  const handleSearchSelectRoom = (room) => {
+    // Switch to the correct sport tab if needed
+    if (room.sportId !== activeMarketId) {
+      setActiveMarketId(room.sportId);
+    }
+
+    // Select the room
+    setFadeKey(Date.now());
+    setActiveRoomId(room.id);
   };
 
   //
@@ -701,6 +1057,21 @@ function App() {
           SLIPROOMS <span className="brand-emoji">V1</span>
         </h1>
 
+        {/* Admin button - only for admins */}
+        {isAdmin && (
+          <button type="button" className="admin-btn" onClick={() => navigate("/admin")}>
+            🛡️ Admin
+          </button>
+        )}
+
+        {/* DM Mailbox button */}
+        <button type="button" className="dm-btn" onClick={() => setShowDMInbox(true)}>
+          📬
+          {dmUnreadCount > 0 && (
+            <span className="dm-badge">{dmUnreadCount > 9 ? "9+" : dmUnreadCount}</span>
+          )}
+        </button>
+
         {/* Profile pill in header */}
         <button type="button" className="profile-pill" onClick={openProfile}>
           <span
@@ -720,9 +1091,9 @@ function App() {
       </p>
     </header>
 
-    <div className="layout">
+    <div className={`layout ${isMobile ? "mobile" : ""} ${isMobile ? `mobile-view-${mobileView}` : ""}`}>
       {/* Sidebar */}
-      <aside className="rooms">
+      <aside className={`rooms ${isMobile && mobileView !== "rooms" ? "mobile-hidden" : ""}`}>
         <div className="market-tabs">
           {markets.map((market) => (
             <button
@@ -739,15 +1110,21 @@ function App() {
           ))}
         </div>
 
+        <RoomSearch
+          allRooms={allRooms}
+          onSelectRoom={handleSearchSelectRoom}
+          activeMarketId={activeMarketId}
+        />
+
         <div className="rooms-header">
           <h2>Rooms</h2>
           <button
             type="button"
             className="create-room-btn"
-            onClick={() => setShowCreateRoom(true)}
-            disabled={currentGames.length === 0}
+            onClick={() => isAdmin ? setShowCreateRoom(true) : setShowSubmitRoom(true)}
+            disabled={isAdmin ? currentGames.length === 0 : false}
           >
-            + Create
+            {isAdmin ? "+ Create" : "+ Submit Room"}
           </button>
         </div>
         {activeMarket.rooms.length === 0 ? (
@@ -779,14 +1156,16 @@ function App() {
                       {room.userCount || 0} {(room.userCount || 0) === 1 ? "user" : "users"}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="room-delete-btn"
-                    onClick={(e) => handleDeleteRoom(e, room.id)}
-                    title="Delete room"
-                  >
-                    ×
-                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="room-delete-btn"
+                      onClick={(e) => handleDeleteRoom(e, room.id)}
+                      title="Delete room"
+                    >
+                      ×
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -795,7 +1174,7 @@ function App() {
       </aside>
 
       {/* Chat */}
-      <main className="chat">
+      <main className={`chat ${isMobile && mobileView !== "chat" ? "mobile-hidden" : ""}`}>
         {!activeRoom ? (
           <div className="empty-chat">
             <h2>No room selected</h2>
@@ -896,7 +1275,7 @@ function App() {
       </main>
 
       {/* LIVE GAMES PANEL */}
-      <aside className="live-games-panel">
+      <aside className={`live-games-panel ${isMobile && mobileView !== "games" ? "mobile-hidden" : ""}`}>
         <div className="live-games-header">
           <h2>Live Games</h2>
           <button type="button" className="refresh-btn" onClick={refreshGames}>
@@ -1000,6 +1379,37 @@ function App() {
           )}
         </div>
       </aside>
+
+      {/* MOBILE BOTTOM NAVIGATION */}
+      {isMobile && (
+        <nav className="mobile-nav">
+          <button
+            type="button"
+            className={`mobile-nav-btn ${mobileView === "rooms" ? "active" : ""}`}
+            onClick={() => setMobileView("rooms")}
+          >
+            <span className="mobile-nav-icon">🏠</span>
+            <span className="mobile-nav-label">Rooms</span>
+          </button>
+          <button
+            type="button"
+            className={`mobile-nav-btn ${mobileView === "chat" ? "active" : ""}`}
+            onClick={() => setMobileView("chat")}
+            disabled={!activeRoomId}
+          >
+            <span className="mobile-nav-icon">💬</span>
+            <span className="mobile-nav-label">Chat</span>
+          </button>
+          <button
+            type="button"
+            className={`mobile-nav-btn ${mobileView === "games" ? "active" : ""}`}
+            onClick={() => setMobileView("games")}
+          >
+            <span className="mobile-nav-icon">🎮</span>
+            <span className="mobile-nav-label">Games</span>
+          </button>
+        </nav>
+      )}
     </div>
 
     {/* CREATE ROOM MODAL */}
@@ -1097,6 +1507,304 @@ function App() {
               disabled={!selectedGameId || !roomBetName.trim()}
             >
               Create Room
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* SUBMIT ROOM MODAL (for non-admin users) */}
+    {showSubmitRoom && (
+      <div
+        className="modal-overlay"
+        onClick={(e) => e.target === e.currentTarget && !submitting && setShowSubmitRoom(false)}
+      >
+        <div className="modal-content submit-room-modal">
+          {submitSuccess ? (
+            <div className="submit-success">
+              <span className="success-icon">✓</span>
+              <h2>Room Submitted!</h2>
+              <p>Waiting for approval.</p>
+            </div>
+          ) : (
+            <>
+              <h2>Submit a Room</h2>
+              <p className="modal-subtitle">Suggest a bet for the community</p>
+
+              {/* Sport Selection */}
+              <div className="submit-field">
+                <label>Sport</label>
+                <select
+                  value={submitSport}
+                  onChange={(e) => {
+                    setSubmitSport(e.target.value);
+                    setSubmitGameId(null);
+                  }}
+                  disabled={submitting}
+                >
+                  <option value="nfl">NFL</option>
+                  <option value="nba">NBA</option>
+                  <option value="mlb">MLB</option>
+                  <option value="nhl">NHL</option>
+                  <option value="soccer">Soccer</option>
+                </select>
+              </div>
+
+              {/* Game Selection */}
+              <div className="submit-field">
+                <label>Game</label>
+                {submitGames.length === 0 ? (
+                  <p className="no-games-msg">No games available for this sport</p>
+                ) : (
+                  <div className="game-select-list compact">
+                    {submitGames.map((game) => (
+                      <button
+                        key={game.id}
+                        type="button"
+                        className={
+                          "game-select-item" +
+                          (submitGameId === game.id ? " game-select-item-active" : "")
+                        }
+                        onClick={() => setSubmitGameId(game.id)}
+                        disabled={submitting}
+                      >
+                        <div className="game-select-teams">
+                          <span>{game.awayTeam?.abbreviation}</span>
+                          <span className="game-select-at">@</span>
+                          <span>{game.homeTeam?.abbreviation}</span>
+                        </div>
+                        <div className="game-select-status">
+                          {game.isLive ? (
+                            <span className="game-live-badge">LIVE</span>
+                          ) : game.isFinal ? (
+                            <span className="game-final-badge">FINAL</span>
+                          ) : (
+                            <span className="game-time">
+                              {new Date(game.date).toLocaleTimeString([], {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Prop/Bet Input - AUTO CAPS */}
+              {submitGameId && (
+                <div className="submit-field">
+                  <label>Your Bet / Prop</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., MAHOMES 3 TOUCHDOWNS"
+                    value={submitProp}
+                    onChange={(e) => setSubmitProp(e.target.value.toUpperCase())}
+                    disabled={submitting}
+                    className="prop-input"
+                  />
+                  <p className="field-hint">Describe the bet you want to sweat</p>
+                </div>
+              )}
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="modal-btn modal-btn-secondary"
+                  onClick={() => {
+                    setShowSubmitRoom(false);
+                    setSubmitSport("nfl");
+                    setSubmitGameId(null);
+                    setSubmitProp("");
+                  }}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="modal-btn modal-btn-primary"
+                  onClick={handleSubmitRoom}
+                  disabled={!submitGameId || !submitProp.trim() || submitting}
+                >
+                  {submitting ? "Submitting..." : "Submit Room"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* DM INBOX MODAL */}
+    {showDMInbox && !activeDMConversation && (
+      <div
+        className="modal-overlay dm-overlay"
+        onClick={(e) => e.target === e.currentTarget && setShowDMInbox(false)}
+      >
+        <div className="dm-inbox">
+          <div className="dm-inbox-header">
+            <h2>Messages</h2>
+            <button className="dm-close" onClick={() => setShowDMInbox(false)}>×</button>
+          </div>
+
+          <button className="dm-new-btn" onClick={() => setShowNewDM(true)}>
+            + New Message
+          </button>
+
+          {dmConversations.length === 0 ? (
+            <div className="dm-empty">
+              <span>📭</span>
+              <p>No messages yet</p>
+              <p className="dm-empty-sub">Start a conversation with a friend</p>
+            </div>
+          ) : (
+            <div className="dm-conversation-list">
+              {dmConversations.map((conv) => {
+                const otherUserId = conv.participants.find((id) => id !== user.uid);
+                const otherUser = conv.participantData?.[otherUserId] || {};
+                const unread = conv.unreadCount?.[user.uid] || 0;
+
+                return (
+                  <div
+                    key={conv.id}
+                    className={`dm-conversation-item ${unread > 0 ? "unread" : ""}`}
+                    onClick={() => openDMConversation(conv)}
+                  >
+                    <div className="dm-conv-avatar">
+                      {otherUser.profilePicture ? (
+                        <img src={otherUser.profilePicture} alt={otherUser.username} />
+                      ) : (
+                        <span>{otherUser.avatarEmoji || "🔥"}</span>
+                      )}
+                    </div>
+                    <div className="dm-conv-content">
+                      <div className="dm-conv-header">
+                        <span className="dm-conv-name">{otherUser.username || "User"}</span>
+                        <span className="dm-conv-time">{formatDMTime(conv.lastMessageTime)}</span>
+                      </div>
+                      <p className="dm-conv-preview">
+                        {conv.lastMessageSender === user.uid && <span className="dm-you">You: </span>}
+                        {conv.lastMessage || "No messages yet"}
+                      </p>
+                    </div>
+                    {unread > 0 && <span className="dm-unread-dot">{unread}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* NEW DM MODAL - Select friend to message */}
+    {showNewDM && (
+      <div
+        className="modal-overlay dm-overlay"
+        onClick={(e) => e.target === e.currentTarget && setShowNewDM(false)}
+      >
+        <div className="dm-inbox dm-new-modal">
+          <div className="dm-inbox-header">
+            <button className="dm-back" onClick={() => setShowNewDM(false)}>←</button>
+            <h2>New Message</h2>
+            <div style={{ width: 32 }} />
+          </div>
+
+          {dmFriends.length === 0 ? (
+            <div className="dm-empty">
+              <span>👥</span>
+              <p>No friends yet</p>
+              <p className="dm-empty-sub">Add friends to start messaging</p>
+            </div>
+          ) : (
+            <div className="dm-friends-list">
+              {dmFriends.map((friend) => (
+                <div
+                  key={friend.id}
+                  className="dm-friend-item"
+                  onClick={() => openDMWithFriend(friend)}
+                >
+                  <div className="dm-conv-avatar">
+                    {friend.profilePicture ? (
+                      <img src={friend.profilePicture} alt={friend.username} />
+                    ) : (
+                      <span>{friend.avatarEmoji || "🔥"}</span>
+                    )}
+                  </div>
+                  <span className="dm-friend-name">{friend.username}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* DM CHAT VIEW */}
+    {activeDMConversation && (
+      <div className="modal-overlay dm-overlay">
+        <div className="dm-chat">
+          <div className="dm-chat-header">
+            <button className="dm-back" onClick={closeDMChat}>←</button>
+            <div className="dm-chat-user" onClick={() => navigate(`/profile/${activeDMConversation.otherUser?.id}`)}>
+              <div className="dm-chat-avatar">
+                {activeDMConversation.otherUser?.profilePicture ? (
+                  <img src={activeDMConversation.otherUser.profilePicture} alt="" />
+                ) : (
+                  <span>{activeDMConversation.otherUser?.avatarEmoji || "🔥"}</span>
+                )}
+              </div>
+              <span className="dm-chat-name">
+                {activeDMConversation.otherUser?.username || "User"}
+              </span>
+            </div>
+            <button className="dm-close" onClick={() => { closeDMChat(); setShowDMInbox(false); }}>×</button>
+          </div>
+
+          <div className="dm-messages">
+            {dmMessages.length === 0 ? (
+              <div className="dm-messages-empty">
+                <p>No messages yet</p>
+                <p className="dm-empty-sub">Send a message to start the conversation</p>
+              </div>
+            ) : (
+              <>
+                {dmMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`dm-message ${msg.senderId === user.uid ? "sent" : "received"}`}
+                  >
+                    <div className="dm-message-bubble">
+                      <p>{msg.text}</p>
+                      <span className="dm-message-time">
+                        {msg.timestamp?.toLocaleTimeString?.([], { hour: "numeric", minute: "2-digit" }) || ""}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <div ref={dmMessagesEndRef} />
+              </>
+            )}
+          </div>
+
+          <div className="dm-input-area">
+            <input
+              type="text"
+              className="dm-input"
+              placeholder="Type a message..."
+              value={dmInput}
+              onChange={(e) => setDmInput(e.target.value)}
+              onKeyDown={handleDMKeyDown}
+            />
+            <button
+              className="dm-send-btn"
+              onClick={handleSendDM}
+              disabled={!dmInput.trim()}
+            >
+              Send
             </button>
           </div>
         </div>
@@ -1345,6 +2053,7 @@ function App() {
     <Routes>
       <Route path="/profile/:userId" element={<ProfilePage />} />
       <Route path="/profile" element={<ProfilePage />} />
+      <Route path="/admin" element={<AdminPage />} />
       <Route path="/" element={mainAppContent} />
     </Routes>
   );

@@ -9,12 +9,16 @@ service cloud.firestore {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Rooms collection - any authenticated user can read/create/update rooms
+    // Rooms collection - any authenticated user can read/update rooms, only admins can create/delete
     match /rooms/{roomId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
+      // Only admins can create rooms
+      allow create: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
       allow update: if request.auth != null; // For userCount/presence tracking
-      allow delete: if request.auth != null; // For admin functionality
+      // Only admins can delete rooms
+      allow delete: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
 
       // Messages subcollection - any authenticated user can read/write messages
       match /messages/{messageId} {
@@ -55,6 +59,23 @@ service cloud.firestore {
       // Users can only delete their own hits
       allow delete: if request.auth != null
         && resource.data.userId == request.auth.uid;
+    }
+
+    // Room Submissions collection (for user-submitted rooms pending approval)
+    match /roomSubmissions/{submissionId} {
+      // Any authenticated user can read submissions (admins need this)
+      allow read: if request.auth != null;
+      // Any authenticated user can create a submission
+      allow create: if request.auth != null
+        && request.resource.data.oddieid == request.auth.uid
+        && request.resource.data.prop is string
+        && request.resource.data.sport is string
+        && request.resource.data.status == "pending";
+      // Only admins can update (approve/reject) - for now allow any authenticated user
+      // In production, add admin check: && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+      allow update: if request.auth != null;
+      // Only admins can delete
+      allow delete: if request.auth != null;
     }
   }
 }

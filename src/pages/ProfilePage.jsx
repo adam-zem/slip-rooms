@@ -1,21 +1,15 @@
-// src/pages/ProfilePage.jsx
+// src/pages/ProfilePage.jsx - Clean Minimal Profile
 import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "../firebase";
+import { storage, auth } from "../firebase";
+import { signOut } from "firebase/auth";
 import { useAuth } from "../contexts/AuthContext";
-import { getProfile, updateProfile, searchUsers, createProfileIfMissing } from "../services/profileService";
-import { getFriends, getPendingRequests, sendFriendRequest, acceptFriendRequest, declineFriendRequest, removeFriend, checkFriendship } from "../services/friendsService";
+import { getProfile, updateProfile, createProfileIfMissing } from "../services/profileService";
+import { getFriends, sendFriendRequest, removeFriend, checkFriendship, getPendingRequests, acceptFriendRequest, declineFriendRequest } from "../services/friendsService";
 import { getGreatestHits, addGreatestHit, deleteGreatestHit, fileToBase64 } from "../services/greatestHitsService";
 import "./ProfilePage.css";
 
-// Tab constants
-const TABS = {
-  GREATEST_HITS: "greatest-hits",
-  FRIENDS: "friends",
-};
-
-// Level emoji based on level
 function getLevelEmoji(level) {
   if (level >= 20) return "👑";
   if (level >= 15) return "🔥";
@@ -27,221 +21,241 @@ function getLevelEmoji(level) {
 function ProfilePage() {
   const { userId: paramUserId } = useParams();
   const navigate = useNavigate();
-  const { user, userProfile, authReady, refreshProfile } = useAuth();
+  const { user, userProfile, authReady, refreshProfile, isAdmin } = useAuth();
 
-  // Determine whose profile we're viewing
   const isOwnProfile = !paramUserId || paramUserId === user?.uid;
   const targetUserId = paramUserId || user?.uid;
 
-  // Profile state
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState(TABS.GREATEST_HITS);
-
-  // Friends state
   const [friends, setFriends] = useState([]);
-  const [pendingRequests, setPendingRequests] = useState([]);
-  const [friendsLoading, setFriendsLoading] = useState(false);
   const [isFriend, setIsFriend] = useState(false);
   const [friendRequestSent, setFriendRequestSent] = useState(false);
-
-  // Greatest Hits state
   const [hits, setHits] = useState([]);
   const [hitsLoading, setHitsLoading] = useState(false);
-  const [showUploadHit, setShowUploadHit] = useState(false);
-  const [uploadData, setUploadData] = useState({ caption: "", sport: "nfl", odds: "", payout: "" });
+
+  // Friend requests (only for own profile)
+  const [friendRequests, setFriendRequests] = useState([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+
+  // Modals
+  const [showSettings, setShowSettings] = useState(false);
+  const [showFriends, setShowFriends] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [selectedHit, setSelectedHit] = useState(null);
+
+  // Editing
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioValue, setBioValue] = useState("");
+  const [savingBio, setSavingBio] = useState(false);
+  const [uploadingPic, setUploadingPic] = useState(false);
+
+  // Upload form
   const [uploadPreview, setUploadPreview] = useState(null);
+  const [uploadData, setUploadData] = useState({ caption: "", sport: "nfl", odds: "", payout: "" });
   const [uploading, setUploading] = useState(false);
 
-  // Profile picture upload
-  const [uploadingPic, setUploadingPic] = useState(false);
   const profilePicRef = useRef(null);
   const hitFileRef = useRef(null);
 
-  // Settings modal state
-  const [showSettings, setShowSettings] = useState(false);
-  const [settingsForm, setSettingsForm] = useState({});
-  const [saving, setSaving] = useState(false);
-
-  // Friend search state
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-
-  // Load profile data
+  // Load profile
   useEffect(() => {
     async function loadProfile() {
       setLoading(true);
       try {
-        let profileData = await getProfile(targetUserId);
-
-        // If viewing own profile and it doesn't exist, create it
-        if (!profileData && isOwnProfile && user) {
-          profileData = await createProfileIfMissing(user.uid, {
+        let data = await getProfile(targetUserId);
+        if (!data && isOwnProfile && user) {
+          data = await createProfileIfMissing(user.uid, {
             username: userProfile?.username || user.displayName || user.email?.split("@")[0] || "User",
             email: user.email || "",
           });
         }
-
-        if (profileData) {
-          setProfile(profileData);
-          setSettingsForm({
-            bio: profileData.bio || "",
-            avatarEmoji: profileData.avatarEmoji || "🔥",
-            avatarColor: profileData.avatarColor || "green",
-            favoriteMarket: profileData.favoriteMarket || "NFL",
-            publicProfile: profileData.publicProfile !== false,
-          });
+        if (data) {
+          setProfile(data);
+          setBioValue(data.bio || "");
         }
-      } catch (error) {
-        console.error("Error loading profile:", error);
+      } catch (err) {
+        console.error("Error loading profile:", err);
       } finally {
         setLoading(false);
       }
     }
-
-    if (targetUserId) {
-      loadProfile();
-    } else {
-      setLoading(false);
-    }
+    if (targetUserId) loadProfile();
+    else setLoading(false);
   }, [targetUserId, user?.uid, isOwnProfile, user, userProfile]);
 
-  // Check friendship status when viewing another profile
+  // Check friendship
   useEffect(() => {
-    async function checkFriendStatus() {
+    async function check() {
       if (!isOwnProfile && user?.uid && targetUserId) {
-        const areFriends = await checkFriendship(user.uid, targetUserId);
-        setIsFriend(areFriends);
+        const result = await checkFriendship(user.uid, targetUserId);
+        setIsFriend(result);
       }
     }
-    checkFriendStatus();
+    check();
   }, [isOwnProfile, user?.uid, targetUserId]);
 
-  // Load friends when tab changes
+  // Load friends
   useEffect(() => {
-    async function loadFriends() {
-      if (activeTab !== TABS.FRIENDS) return;
-
-      setFriendsLoading(true);
+    async function load() {
+      if (!targetUserId) return;
       try {
-        const [friendsList, requests] = await Promise.all([
-          getFriends(targetUserId),
-          isOwnProfile ? getPendingRequests(targetUserId) : Promise.resolve([]),
-        ]);
-        setFriends(friendsList);
-        setPendingRequests(requests);
-      } catch (error) {
-        console.error("Error loading friends:", error);
-      } finally {
-        setFriendsLoading(false);
+        const list = await getFriends(targetUserId);
+        setFriends(list);
+      } catch (err) {
+        console.error("Error loading friends:", err);
       }
     }
+    load();
+  }, [targetUserId]);
 
-    loadFriends();
-  }, [activeTab, targetUserId, isOwnProfile]);
-
-  // Load greatest hits when tab changes
+  // Load friend requests (only for own profile)
   useEffect(() => {
-    async function loadHits() {
-      if (activeTab !== TABS.GREATEST_HITS) return;
+    async function loadRequests() {
+      if (!isOwnProfile || !user?.uid) return;
+      setRequestsLoading(true);
+      try {
+        const requests = await getPendingRequests(user.uid);
+        setFriendRequests(requests);
+      } catch (err) {
+        console.error("Error loading friend requests:", err);
+      } finally {
+        setRequestsLoading(false);
+      }
+    }
+    loadRequests();
+  }, [isOwnProfile, user?.uid]);
 
+  // Load hits
+  useEffect(() => {
+    async function load() {
+      if (!targetUserId || !profile) return;
+      if (!isOwnProfile && !profile.publicProfile && !isFriend) return;
       setHitsLoading(true);
       try {
-        const hitsList = await getGreatestHits(targetUserId);
-        setHits(hitsList);
-      } catch (error) {
-        console.error("Error loading hits:", error);
+        const list = await getGreatestHits(targetUserId);
+        setHits(list);
+      } catch (err) {
+        console.error("Error loading hits:", err);
       } finally {
         setHitsLoading(false);
       }
     }
+    if (profile) load();
+  }, [targetUserId, profile, isOwnProfile, isFriend]);
 
-    loadHits();
-  }, [activeTab, targetUserId]);
-
-  // Search users
-  useEffect(() => {
-    const searchTimer = setTimeout(async () => {
-      if (searchTerm.length >= 2) {
-        setSearching(true);
-        try {
-          const results = await searchUsers(searchTerm, user?.uid);
-          setSearchResults(results);
-        } catch (error) {
-          console.error("Search error:", error);
-        } finally {
-          setSearching(false);
-        }
-      } else {
-        setSearchResults([]);
-      }
-    }, 300);
-
-    return () => clearTimeout(searchTimer);
-  }, [searchTerm, user?.uid]);
-
-  // Profile picture upload handler
-  const handleProfilePicUpload = async (e) => {
+  // Profile picture upload
+  const handlePicUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !user?.uid) return;
-
-    // Validate file
-    if (!file.type.startsWith("image/")) {
-      alert("Please select an image file");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      alert("Image must be less than 5MB");
-      return;
-    }
+    if (!file.type.startsWith("image/")) return alert("Please select an image");
+    if (file.size > 5 * 1024 * 1024) return alert("Max 5MB");
 
     setUploadingPic(true);
     try {
-      // Upload to Firebase Storage
       const storageRef = ref(storage, `profilePics/${user.uid}`);
       await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
-
-      // Update profile with new picture URL
-      await updateProfile(user.uid, { profilePicture: downloadURL });
-
-      // Update local state
-      setProfile((prev) => ({ ...prev, profilePicture: downloadURL }));
-    } catch (error) {
-      console.error("Error uploading profile picture:", error);
-      alert("Failed to upload. Please try again.");
+      const url = await getDownloadURL(storageRef);
+      await updateProfile(user.uid, { profilePicture: url });
+      setProfile((p) => ({ ...p, profilePicture: url }));
+    } catch (err) {
+      console.error("Upload error:", err);
+      alert("Upload failed");
     } finally {
       setUploadingPic(false);
     }
   };
 
-  // Greatest hit file select
-  const handleHitFileSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("Please select an image file");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      alert("Image must be less than 5MB");
-      return;
-    }
-
+  // Bio save
+  const handleSaveBio = async () => {
+    if (!user?.uid) return;
+    setSavingBio(true);
     try {
-      const base64 = await fileToBase64(file);
-      setUploadPreview(base64);
-    } catch (error) {
-      console.error("Error reading file:", error);
+      await updateProfile(user.uid, { bio: bioValue });
+      setProfile((p) => ({ ...p, bio: bioValue }));
+      setEditingBio(false);
+    } catch (err) {
+      console.error("Save error:", err);
+    } finally {
+      setSavingBio(false);
     }
   };
 
-  // Upload greatest hit
+  // Privacy toggle
+  const togglePrivacy = async () => {
+    if (!user?.uid || !isOwnProfile) return;
+    const newVal = !profile.publicProfile;
+    try {
+      await updateProfile(user.uid, { publicProfile: newVal });
+      setProfile((p) => ({ ...p, publicProfile: newVal }));
+    } catch (err) {
+      console.error("Privacy toggle error:", err);
+    }
+  };
+
+  // Friend actions
+  const handleAddFriend = async () => {
+    try {
+      await sendFriendRequest(user.uid, targetUserId);
+      setFriendRequestSent(true);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleRemoveFriend = async () => {
+    if (!confirm("Remove friend?")) return;
+    try {
+      await removeFriend(user.uid, targetUserId);
+      setIsFriend(false);
+    } catch (err) {
+      console.error("Remove error:", err);
+    }
+  };
+
+  // Accept friend request
+  const handleAcceptRequest = async (requestId) => {
+    try {
+      await acceptFriendRequest(requestId);
+      // Remove from local state
+      setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+      // Refresh friends list
+      const updatedFriends = await getFriends(user.uid);
+      setFriends(updatedFriends);
+    } catch (err) {
+      console.error("Accept request error:", err);
+      alert("Failed to accept request");
+    }
+  };
+
+  // Decline friend request
+  const handleDeclineRequest = async (requestId) => {
+    try {
+      await declineFriendRequest(requestId);
+      // Remove from local state
+      setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    } catch (err) {
+      console.error("Decline request error:", err);
+      alert("Failed to decline request");
+    }
+  };
+
+  // Hit upload
+  const handleHitFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return alert("Please select an image");
+    if (file.size > 5 * 1024 * 1024) return alert("Max 5MB");
+    try {
+      const base64 = await fileToBase64(file);
+      setUploadPreview(base64);
+    } catch (err) {
+      console.error("File read error:", err);
+    }
+  };
+
   const handleUploadHit = async () => {
     if (!uploadPreview || !user?.uid) return;
-
     setUploading(true);
     try {
       await addGreatestHit(user.uid, {
@@ -251,105 +265,43 @@ function ProfilePage() {
         odds: uploadData.odds,
         payout: uploadData.payout,
       });
-
-      const hitsList = await getGreatestHits(targetUserId);
-      setHits(hitsList);
-
-      setShowUploadHit(false);
+      const list = await getGreatestHits(targetUserId);
+      setHits(list);
+      setShowUpload(false);
       setUploadPreview(null);
       setUploadData({ caption: "", sport: "nfl", odds: "", payout: "" });
-    } catch (error) {
-      console.error("Error uploading hit:", error);
-      alert("Failed to upload. Please try again.");
+    } catch (err) {
+      console.error("Upload error:", err);
+      alert("Upload failed");
     } finally {
       setUploading(false);
     }
   };
 
-  const handleDeleteHit = async (hitId) => {
-    if (!confirm("Delete this greatest hit?")) return;
-
+  const handleDeleteHit = async (id) => {
+    if (!confirm("Delete this hit?")) return;
     try {
-      await deleteGreatestHit(hitId, user.uid);
-      setHits((prev) => prev.filter((h) => h.id !== hitId));
-    } catch (error) {
-      console.error("Error deleting hit:", error);
+      await deleteGreatestHit(id, user.uid);
+      setHits((h) => h.filter((x) => x.id !== id));
+      setSelectedHit(null);
+    } catch (err) {
+      console.error("Delete error:", err);
     }
   };
 
-  // Save settings
-  const handleSaveSettings = async () => {
-    setSaving(true);
-    try {
-      await updateProfile(user.uid, settingsForm);
-      await refreshProfile();
-      const profileData = await getProfile(user.uid);
-      setProfile(profileData);
-      setShowSettings(false);
-    } catch (error) {
-      console.error("Error saving settings:", error);
-      alert("Failed to save. Please try again.");
-    } finally {
-      setSaving(false);
-    }
+  const handleLogout = async () => {
+    await signOut(auth);
+    navigate("/");
   };
 
-  // Friend actions
-  const handleSendFriendRequest = async (toUserId) => {
-    try {
-      await sendFriendRequest(user.uid, toUserId);
-      if (toUserId === targetUserId) {
-        setFriendRequestSent(true);
-      }
-      setSearchResults((prev) =>
-        prev.map((u) => (u.id === toUserId ? { ...u, requestSent: true } : u))
-      );
-    } catch (error) {
-      alert(error.message);
-    }
-  };
+  const isPrivate = !isOwnProfile && profile && !profile.publicProfile && !isFriend;
 
-  const handleAcceptRequest = async (requestId) => {
-    try {
-      await acceptFriendRequest(requestId);
-      setPendingRequests((prev) => prev.filter((r) => r.id !== requestId));
-      const friendsList = await getFriends(targetUserId);
-      setFriends(friendsList);
-    } catch (error) {
-      console.error("Error accepting request:", error);
-    }
-  };
-
-  const handleDeclineRequest = async (requestId) => {
-    try {
-      await declineFriendRequest(requestId);
-      setPendingRequests((prev) => prev.filter((r) => r.id !== requestId));
-    } catch (error) {
-      console.error("Error declining request:", error);
-    }
-  };
-
-  const handleRemoveFriend = async (friendId) => {
-    if (!confirm("Remove this friend?")) return;
-
-    try {
-      await removeFriend(user.uid, friendId);
-      setFriends((prev) => prev.filter((f) => f.id !== friendId));
-      if (friendId === targetUserId) {
-        setIsFriend(false);
-      }
-    } catch (error) {
-      console.error("Error removing friend:", error);
-    }
-  };
-
-  // Auth checks
-  if (!authReady) {
+  // Loading states
+  if (!authReady || loading) {
     return (
       <div className="profile-page">
-        <div className="profile-loading">
-          <div className="profile-spinner"></div>
-          <p>Loading...</p>
+        <div className="profile-center">
+          <div className="spinner" />
         </div>
       </div>
     );
@@ -358,23 +310,9 @@ function ProfilePage() {
   if (!user) {
     return (
       <div className="profile-page">
-        <div className="profile-not-found">
-          <h2>Please Log In</h2>
-          <p>You need to be logged in to view profiles.</p>
-          <button onClick={() => navigate("/")} className="profile-back-btn">
-            Go to Login
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="profile-page">
-        <div className="profile-loading">
-          <div className="profile-spinner"></div>
-          <p>Loading profile...</p>
+        <div className="profile-center">
+          <p>Please log in to view profiles</p>
+          <button className="btn" onClick={() => navigate("/")}>Go to Login</button>
         </div>
       </div>
     );
@@ -383,12 +321,9 @@ function ProfilePage() {
   if (!profile) {
     return (
       <div className="profile-page">
-        <div className="profile-not-found">
-          <h2>Profile Not Found</h2>
-          <p>This user doesn't exist or their profile is private.</p>
-          <button onClick={() => navigate("/")} className="profile-back-btn">
-            Back to Rooms
-          </button>
+        <div className="profile-center">
+          <p>Profile not found</p>
+          <button className="btn" onClick={() => navigate("/")}>Back to Rooms</button>
         </div>
       </div>
     );
@@ -396,413 +331,295 @@ function ProfilePage() {
 
   return (
     <div className="profile-page">
-      {/* Header bar */}
-      <div className="profile-header-bar">
-        <button onClick={() => navigate("/")} className="profile-back-btn">
-          ← Back to Rooms
-        </button>
-        {isOwnProfile && (
-          <button className="profile-settings-btn" onClick={() => setShowSettings(true)}>
-            ⚙️
+      {/* Settings Gear */}
+      {isOwnProfile && (
+        <button className="settings-gear" onClick={() => setShowSettings(true)}>⚙️</button>
+      )}
+
+      {/* Back Button */}
+      <button className="back-btn" onClick={() => navigate("/")}>← Back</button>
+
+      {/* Main Content */}
+      <div className="profile-content">
+        {/* Profile Picture */}
+        <div
+          className={`avatar ${isOwnProfile ? "editable" : ""}`}
+          onClick={() => isOwnProfile && profilePicRef.current?.click()}
+        >
+          {uploadingPic ? (
+            <div className="spinner-small" />
+          ) : profile.profilePicture ? (
+            <img src={profile.profilePicture} alt={profile.username} />
+          ) : (
+            <span className="avatar-emoji">{profile.avatarEmoji || "🔥"}</span>
+          )}
+          {isOwnProfile && <div className="avatar-hover">📷</div>}
+          <input
+            ref={profilePicRef}
+            type="file"
+            accept="image/*"
+            onChange={handlePicUpload}
+            hidden
+          />
+        </div>
+
+        {/* Username */}
+        <h1 className="username">{profile.username}</h1>
+
+        {/* Level Badge */}
+        <div className="level-badge">
+          LVL {profile.level} {getLevelEmoji(profile.level)} {profile.title}
+        </div>
+
+        {/* XP Bar */}
+        <div className="xp-bar">
+          <div className="xp-fill" style={{ width: `${profile.progress || 0}%` }} />
+        </div>
+
+        {/* Bio */}
+        {!isPrivate && (
+          <div className="bio-section">
+            {editingBio ? (
+              <div className="bio-edit">
+                <textarea
+                  value={bioValue}
+                  onChange={(e) => setBioValue(e.target.value)}
+                  placeholder="Write something about yourself..."
+                  maxLength={200}
+                />
+                <div className="bio-actions">
+                  <span className="char-count">{bioValue.length}/200</span>
+                  <button className="btn-small" onClick={() => { setEditingBio(false); setBioValue(profile.bio || ""); }}>Cancel</button>
+                  <button className="btn-small primary" onClick={handleSaveBio} disabled={savingBio}>
+                    {savingBio ? "..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="bio-text">
+                {profile.bio || (isOwnProfile ? "No bio yet" : "No bio")}
+                {isOwnProfile && (
+                  <button className="edit-icon" onClick={() => setEditingBio(true)}>✏️</button>
+                )}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Privacy Badge */}
+        {isOwnProfile ? (
+          <button className="privacy-btn" onClick={togglePrivacy}>
+            {profile.publicProfile ? "🌐 Public" : "🔒 Private"}
+          </button>
+        ) : (
+          <span className={`privacy-badge ${profile.publicProfile ? "public" : "private"}`}>
+            {profile.publicProfile ? "🌐 Public" : "🔒 Private"}
+          </span>
+        )}
+
+        {/* Friends Button */}
+        {!isPrivate && (
+          <button className="friends-btn" onClick={() => setShowFriends(true)}>
+            {friends.length} Friends
+            {isOwnProfile && friendRequests.length > 0 && (
+              <span className="request-badge">{friendRequests.length} pending</span>
+            )}
           </button>
         )}
-      </div>
 
-      {/* Main profile content */}
-      <div className="profile-content">
-        {/* Profile card - left/top section */}
-        <div className="profile-card">
-          {/* Profile picture */}
-          <div
-            className={`profile-picture ${isOwnProfile ? "editable" : ""}`}
-            onClick={() => isOwnProfile && profilePicRef.current?.click()}
-          >
-            {uploadingPic ? (
-              <div className="profile-pic-loading">
-                <div className="profile-spinner-small"></div>
-              </div>
-            ) : profile.profilePicture ? (
-              <img src={profile.profilePicture} alt={profile.username} />
-            ) : (
-              <div className={`profile-pic-emoji profile-avatar-${profile.avatarColor}`}>
-                {profile.avatarEmoji}
-              </div>
-            )}
-            {isOwnProfile && (
-              <div className="profile-pic-overlay">
-                <span>📷</span>
-              </div>
-            )}
-            <input
-              ref={profilePicRef}
-              type="file"
-              accept="image/*"
-              onChange={handleProfilePicUpload}
-              style={{ display: "none" }}
-            />
-          </div>
-
-          {/* Username */}
-          <h1 className="profile-username">{profile.username}</h1>
-
-          {/* Level badge */}
-          <div className="profile-level-badge">
-            <span className="profile-level">LVL {profile.level}</span>
-            <span className="profile-level-emoji">{getLevelEmoji(profile.level)}</span>
-            <span className="profile-title">{profile.title}</span>
-          </div>
-
-          {/* XP Progress bar */}
-          <div className="profile-xp-bar-container">
-            <div className="profile-xp-bar">
-              <div
-                className="profile-xp-fill"
-                style={{ width: `${profile.progress || 0}%` }}
-              ></div>
-            </div>
-            <span className="profile-xp-text">
-              {profile.xp} / {profile.nextLevelXP || "MAX"} XP
-            </span>
-          </div>
-
-          {/* Bio */}
-          {profile.bio && <p className="profile-bio">{profile.bio}</p>}
-
-          {/* Action button */}
-          {isOwnProfile ? (
-            <button className="profile-action-btn edit" onClick={() => setShowSettings(true)}>
-              Edit Profile
-            </button>
-          ) : isFriend ? (
-            <button
-              className="profile-action-btn friends"
-              onClick={() => handleRemoveFriend(targetUserId)}
-            >
-              ✓ Friends
-            </button>
-          ) : friendRequestSent ? (
-            <button className="profile-action-btn pending" disabled>
-              Request Sent
-            </button>
-          ) : (
-            <button
-              className="profile-action-btn add"
-              onClick={() => handleSendFriendRequest(targetUserId)}
-            >
-              + Add Friend
-            </button>
-          )}
-
-          {/* Stats */}
-          <div className="profile-stats">
-            <div className="profile-stat">
-              <span className="profile-stat-value">{profile.totalMessages || 0}</span>
-              <span className="profile-stat-label">Messages</span>
-            </div>
-            <div className="profile-stat">
-              <span className="profile-stat-value">{profile.friendCount || 0}</span>
-              <span className="profile-stat-label">Friends</span>
-            </div>
-            <div className="profile-stat">
-              <span className="profile-stat-value">{profile.hitCount || 0}</span>
-              <span className="profile-stat-label">Hits</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Main content area */}
-        <div className="profile-main">
-          {/* Tabs */}
-          <div className="profile-tabs">
-            <button
-              className={`profile-tab ${activeTab === TABS.GREATEST_HITS ? "active" : ""}`}
-              onClick={() => setActiveTab(TABS.GREATEST_HITS)}
-            >
-              Greatest Hits
-            </button>
-            <button
-              className={`profile-tab ${activeTab === TABS.FRIENDS ? "active" : ""}`}
-              onClick={() => setActiveTab(TABS.FRIENDS)}
-            >
-              Friends
-              {pendingRequests.length > 0 && (
-                <span className="profile-tab-badge">{pendingRequests.length}</span>
-              )}
-            </button>
-          </div>
-
-          {/* Tab content */}
-          <div className="profile-tab-content">
-            {/* GREATEST HITS TAB */}
-            {activeTab === TABS.GREATEST_HITS && (
-              <div className="profile-hits">
-                {isOwnProfile && (
-                  <button
-                    className="profile-upload-btn"
-                    onClick={() => setShowUploadHit(true)}
-                  >
-                    + Upload Greatest Hit
-                  </button>
-                )}
-
-                {hitsLoading ? (
-                  <div className="profile-loading-small">Loading hits...</div>
-                ) : hits.length === 0 ? (
-                  <div className="profile-empty">
-                    <p>No greatest hits yet</p>
-                    {isOwnProfile && (
-                      <p className="profile-empty-sub">
-                        Show off your winning bet slips!
-                      </p>
+        {/* Friend Requests Section (only on own profile, only if has requests) */}
+        {isOwnProfile && friendRequests.length > 0 && (
+          <div className="friend-requests-section">
+            <h3 className="requests-title">Friend Requests</h3>
+            <div className="requests-list">
+              {friendRequests.map((req) => (
+                <div key={req.id} className="request-card">
+                  <div className="request-user" onClick={() => navigate(`/profile/${req.from}`)}>
+                    {req.fromProfilePic ? (
+                      <img src={req.fromProfilePic} alt={req.fromUsername} className="request-pic" />
+                    ) : (
+                      <span className="request-emoji">{req.fromAvatar}</span>
                     )}
-                  </div>
-                ) : (
-                  <div className="profile-hits-grid">
-                    {hits.map((hit) => (
-                      <div key={hit.id} className="profile-hit-card">
-                        <img
-                          src={hit.imageUrl}
-                          alt={hit.caption || "Greatest hit"}
-                          className="profile-hit-image"
-                        />
-                        <div className="profile-hit-overlay">
-                          {hit.caption && (
-                            <p className="profile-hit-caption">{hit.caption}</p>
-                          )}
-                          <div className="profile-hit-details">
-                            {hit.sport && (
-                              <span className="profile-hit-tag">
-                                {hit.sport.toUpperCase()}
-                              </span>
-                            )}
-                            {hit.odds && (
-                              <span className="profile-hit-tag">{hit.odds}</span>
-                            )}
-                            {hit.payout && (
-                              <span className="profile-hit-tag payout">{hit.payout}</span>
-                            )}
-                          </div>
-                          {isOwnProfile && (
-                            <button
-                              className="profile-hit-delete"
-                              onClick={() => handleDeleteHit(hit.id)}
-                            >
-                              ×
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* FRIENDS TAB */}
-            {activeTab === TABS.FRIENDS && (
-              <div className="profile-friends">
-                {isOwnProfile && (
-                  <>
-                    {/* Search */}
-                    <div className="profile-search">
-                      <input
-                        type="text"
-                        placeholder="Search users..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                      />
-                      {searching && <span className="profile-search-spinner"></span>}
+                    <div className="request-info">
+                      <span className="request-name">{req.fromUsername}</span>
+                      <span className="request-level">LVL {req.fromLevel} • {req.fromTitle}</span>
                     </div>
-
-                    {/* Search results */}
-                    {searchResults.length > 0 && (
-                      <div className="profile-search-results">
-                        {searchResults.map((u) => (
-                          <div key={u.id} className="profile-friend-row">
-                            <div
-                              className={`profile-friend-avatar profile-avatar-${u.avatarColor}`}
-                            >
-                              {u.avatarEmoji}
-                            </div>
-                            <div className="profile-friend-info">
-                              <span
-                                className="profile-friend-name"
-                                onClick={() => navigate(`/profile/${u.id}`)}
-                              >
-                                {u.username}
-                              </span>
-                              <span className="profile-friend-level">LVL {u.level}</span>
-                            </div>
-                            {u.requestSent ? (
-                              <span className="profile-friend-status">Sent</span>
-                            ) : (
-                              <button
-                                className="profile-friend-add-btn"
-                                onClick={() => handleSendFriendRequest(u.id)}
-                              >
-                                Add
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Pending requests */}
-                    {pendingRequests.length > 0 && (
-                      <div className="profile-requests">
-                        <h3>Friend Requests</h3>
-                        {pendingRequests.map((req) => (
-                          <div key={req.id} className="profile-friend-row request">
-                            <div className="profile-friend-avatar">{req.fromAvatar}</div>
-                            <div className="profile-friend-info">
-                              <span className="profile-friend-name">{req.fromUsername}</span>
-                            </div>
-                            <div className="profile-request-actions">
-                              <button
-                                className="profile-request-accept"
-                                onClick={() => handleAcceptRequest(req.id)}
-                              >
-                                ✓
-                              </button>
-                              <button
-                                className="profile-request-decline"
-                                onClick={() => handleDeclineRequest(req.id)}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Friends list */}
-                <div className="profile-friends-list">
-                  <h3>{isOwnProfile ? "Your Friends" : `${profile.username}'s Friends`}</h3>
-                  {friendsLoading ? (
-                    <div className="profile-loading-small">Loading...</div>
-                  ) : friends.length === 0 ? (
-                    <div className="profile-empty">
-                      <p>No friends yet</p>
-                    </div>
-                  ) : (
-                    friends.map((friend) => (
-                      <div key={friend.id} className="profile-friend-row">
-                        <div
-                          className={`profile-friend-avatar profile-avatar-${friend.avatarColor}`}
-                        >
-                          {friend.avatarEmoji}
-                        </div>
-                        <div className="profile-friend-info">
-                          <span
-                            className="profile-friend-name"
-                            onClick={() => navigate(`/profile/${friend.id}`)}
-                          >
-                            {friend.username}
-                          </span>
-                          <span className="profile-friend-level">
-                            LVL {Math.min(20, Math.floor((friend.xp || 0) / 100) + 1)}
-                          </span>
-                        </div>
-                        {isOwnProfile && (
-                          <button
-                            className="profile-friend-remove"
-                            onClick={() => handleRemoveFriend(friend.id)}
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    ))
-                  )}
+                  </div>
+                  <div className="request-actions">
+                    <button
+                      className="request-btn accept"
+                      onClick={() => handleAcceptRequest(req.id)}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      className="request-btn decline"
+                      onClick={() => handleDeclineRequest(req.id)}
+                    >
+                      Decline
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Friend Action (viewing other profiles) */}
+        {!isOwnProfile && (
+          <div className="friend-action">
+            {isFriend ? (
+              <button className="btn friend-active" onClick={handleRemoveFriend}>✓ Friends</button>
+            ) : friendRequestSent ? (
+              <button className="btn" disabled>Request Sent</button>
+            ) : (
+              <button className="btn primary" onClick={handleAddFriend}>+ Add Friend</button>
             )}
           </div>
+        )}
+
+        {/* Greatest Hits */}
+        <div className="hits-section">
+          <h2 className="hits-title">Greatest Hits</h2>
+
+          {isPrivate ? (
+            <div className="private-message">
+              <span className="lock-icon">🔒</span>
+              <p>This profile is private</p>
+              <p className="sub">Add {profile.username} as a friend to see their hits</p>
+            </div>
+          ) : hitsLoading ? (
+            <div className="hits-loading"><div className="spinner-small" /></div>
+          ) : hits.length === 0 ? (
+            <div className="hits-empty">
+              <span>🏆</span>
+              <p>No hits yet</p>
+              {isOwnProfile && (
+                <button className="btn primary" onClick={() => setShowUpload(true)}>+ Upload Hit</button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="hits-grid">
+                {hits.map((hit) => (
+                  <div key={hit.id} className="hit-card" onClick={() => setSelectedHit(hit)}>
+                    <img src={hit.imageUrl} alt={hit.caption || "Hit"} />
+                    {hit.payout && <span className="hit-payout">{hit.payout}</span>}
+                  </div>
+                ))}
+              </div>
+              {isOwnProfile && (
+                <button className="btn upload-btn" onClick={() => setShowUpload(true)}>+ Upload Hit</button>
+              )}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Upload Hit Modal */}
-      {showUploadHit && (
-        <div className="profile-modal-overlay" onClick={(e) => e.target === e.currentTarget && setShowUploadHit(false)}>
-          <div className="profile-modal">
-            <h2>Upload Greatest Hit</h2>
-            <p className="profile-modal-sub">Show off your winning slip!</p>
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Settings</h2>
+            <div className="settings-list">
+              <label className="setting-row">
+                <span>🔔 Notifications</span>
+                <input type="checkbox" defaultChecked />
+              </label>
+              <label className="setting-row">
+                <span>🔊 Sound Effects</span>
+                <input type="checkbox" defaultChecked />
+              </label>
+            </div>
+            {isAdmin && (
+              <button className="btn admin-link" onClick={() => { setShowSettings(false); navigate("/admin"); }}>
+                🛡️ Admin Dashboard
+              </button>
+            )}
+            <button className="btn logout-btn" onClick={handleLogout}>🚪 Log Out</button>
+            <button className="btn modal-close" onClick={() => setShowSettings(false)}>Close</button>
+          </div>
+        </div>
+      )}
 
-            <div className="profile-upload-area" onClick={() => !uploadPreview && hitFileRef.current?.click()}>
+      {/* Friends Modal */}
+      {showFriends && (
+        <div className="modal-overlay" onClick={() => setShowFriends(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Friends ({friends.length})</h2>
+            {friends.length === 0 ? (
+              <p className="empty-text">No friends yet</p>
+            ) : (
+              <div className="friends-list">
+                {friends.map((f) => (
+                  <div key={f.id} className="friend-row" onClick={() => { setShowFriends(false); navigate(`/profile/${f.id}`); }}>
+                    <span className="friend-emoji">{f.avatarEmoji || "🔥"}</span>
+                    <span className="friend-name">{f.username}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="btn modal-close" onClick={() => setShowFriends(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Modal */}
+      {showUpload && (
+        <div className="modal-overlay" onClick={() => setShowUpload(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Upload Hit</h2>
+            <div className="upload-area" onClick={() => !uploadPreview && hitFileRef.current?.click()}>
               {uploadPreview ? (
-                <div className="profile-upload-preview">
+                <div className="upload-preview">
                   <img src={uploadPreview} alt="Preview" />
-                  <button
-                    className="profile-upload-remove"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setUploadPreview(null);
-                    }}
-                  >
-                    ×
-                  </button>
+                  <button className="remove-preview" onClick={(e) => { e.stopPropagation(); setUploadPreview(null); }}>×</button>
                 </div>
               ) : (
-                <div className="profile-upload-placeholder">
+                <div className="upload-placeholder">
                   <span>📸</span>
-                  <p>Click to select image</p>
+                  <p>Click to select</p>
                 </div>
               )}
-              <input
-                ref={hitFileRef}
-                type="file"
-                accept="image/*"
-                onChange={handleHitFileSelect}
-                style={{ display: "none" }}
-              />
+              <input ref={hitFileRef} type="file" accept="image/*" onChange={handleHitFile} hidden />
             </div>
-
-            <div className="profile-upload-form">
+            <input
+              type="text"
+              className="input"
+              placeholder="Caption (optional)"
+              value={uploadData.caption}
+              onChange={(e) => setUploadData((d) => ({ ...d, caption: e.target.value }))}
+            />
+            <div className="upload-row">
+              <select
+                className="input"
+                value={uploadData.sport}
+                onChange={(e) => setUploadData((d) => ({ ...d, sport: e.target.value }))}
+              >
+                <option value="nfl">NFL</option>
+                <option value="nba">NBA</option>
+                <option value="mlb">MLB</option>
+                <option value="nhl">NHL</option>
+                <option value="soccer">Soccer</option>
+              </select>
               <input
                 type="text"
-                placeholder="Caption (optional)"
-                value={uploadData.caption}
-                onChange={(e) => setUploadData((p) => ({ ...p, caption: e.target.value }))}
+                className="input"
+                placeholder="Odds"
+                value={uploadData.odds}
+                onChange={(e) => setUploadData((d) => ({ ...d, odds: e.target.value }))}
               />
-              <div className="profile-upload-row">
-                <select
-                  value={uploadData.sport}
-                  onChange={(e) => setUploadData((p) => ({ ...p, sport: e.target.value }))}
-                >
-                  <option value="nfl">NFL</option>
-                  <option value="nba">NBA</option>
-                  <option value="mlb">MLB</option>
-                  <option value="nhl">NHL</option>
-                  <option value="soccer">Soccer</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Odds"
-                  value={uploadData.odds}
-                  onChange={(e) => setUploadData((p) => ({ ...p, odds: e.target.value }))}
-                />
-                <input
-                  type="text"
-                  placeholder="Payout"
-                  value={uploadData.payout}
-                  onChange={(e) => setUploadData((p) => ({ ...p, payout: e.target.value }))}
-                />
-              </div>
+              <input
+                type="text"
+                className="input"
+                placeholder="Payout"
+                value={uploadData.payout}
+                onChange={(e) => setUploadData((d) => ({ ...d, payout: e.target.value }))}
+              />
             </div>
-
-            <div className="profile-modal-actions">
-              <button className="profile-modal-btn secondary" onClick={() => setShowUploadHit(false)}>
-                Cancel
-              </button>
-              <button
-                className="profile-modal-btn primary"
-                onClick={handleUploadHit}
-                disabled={!uploadPreview || uploading}
-              >
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setShowUpload(false)}>Cancel</button>
+              <button className="btn primary" onClick={handleUploadHit} disabled={!uploadPreview || uploading}>
                 {uploading ? "Uploading..." : "Upload"}
               </button>
             </div>
@@ -810,94 +627,23 @@ function ProfilePage() {
         </div>
       )}
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <div className="profile-modal-overlay" onClick={(e) => e.target === e.currentTarget && setShowSettings(false)}>
-          <div className="profile-modal settings-modal">
-            <h2>Edit Profile</h2>
-
-            {/* Avatar emoji picker */}
-            <div className="settings-section">
-              <label>Avatar Emoji</label>
-              <div className="settings-emoji-grid">
-                {["🔥", "😭", "😅", "🤞", "💰", "🍀", "🧱", "🤯", "😡"].map((emoji) => (
-                  <button
-                    key={emoji}
-                    className={`settings-emoji ${settingsForm.avatarEmoji === emoji ? "active" : ""}`}
-                    onClick={() => setSettingsForm((p) => ({ ...p, avatarEmoji: emoji }))}
-                  >
-                    {emoji}
-                  </button>
-                ))}
+      {/* Hit Viewer Modal */}
+      {selectedHit && (
+        <div className="modal-overlay" onClick={() => setSelectedHit(null)}>
+          <div className="modal hit-viewer" onClick={(e) => e.stopPropagation()}>
+            <img src={selectedHit.imageUrl} alt={selectedHit.caption || "Hit"} />
+            <div className="hit-info">
+              {selectedHit.caption && <p>{selectedHit.caption}</p>}
+              <div className="hit-tags">
+                {selectedHit.sport && <span className="tag">{selectedHit.sport.toUpperCase()}</span>}
+                {selectedHit.odds && <span className="tag">{selectedHit.odds}</span>}
+                {selectedHit.payout && <span className="tag green">{selectedHit.payout}</span>}
               </div>
+              {isOwnProfile && (
+                <button className="btn delete-btn" onClick={() => handleDeleteHit(selectedHit.id)}>Delete</button>
+              )}
             </div>
-
-            {/* Avatar color picker */}
-            <div className="settings-section">
-              <label>Avatar Color</label>
-              <div className="settings-color-grid">
-                {["green", "blue", "orange", "red", "purple"].map((color) => (
-                  <button
-                    key={color}
-                    className={`settings-color profile-avatar-${color} ${settingsForm.avatarColor === color ? "active" : ""}`}
-                    onClick={() => setSettingsForm((p) => ({ ...p, avatarColor: color }))}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Bio */}
-            <div className="settings-section">
-              <label>Bio</label>
-              <textarea
-                value={settingsForm.bio}
-                onChange={(e) => setSettingsForm((p) => ({ ...p, bio: e.target.value }))}
-                placeholder="Tell us about yourself..."
-                maxLength={200}
-              />
-              <span className="settings-char-count">{settingsForm.bio?.length || 0}/200</span>
-            </div>
-
-            {/* Favorite market */}
-            <div className="settings-section">
-              <label>Favorite Market</label>
-              <select
-                value={settingsForm.favoriteMarket}
-                onChange={(e) => setSettingsForm((p) => ({ ...p, favoriteMarket: e.target.value }))}
-              >
-                <option value="NFL">NFL</option>
-                <option value="NBA">NBA</option>
-                <option value="MLB">MLB</option>
-                <option value="NHL">NHL</option>
-                <option value="Soccer">Soccer</option>
-              </select>
-            </div>
-
-            {/* Privacy */}
-            <div className="settings-section">
-              <label className="settings-toggle">
-                <input
-                  type="checkbox"
-                  checked={settingsForm.publicProfile}
-                  onChange={(e) => setSettingsForm((p) => ({ ...p, publicProfile: e.target.checked }))}
-                />
-                <span className="settings-toggle-slider"></span>
-                <span>Public Profile</span>
-              </label>
-            </div>
-
-            <div className="profile-modal-actions">
-              <button className="profile-modal-btn secondary" onClick={() => setShowSettings(false)}>
-                Cancel
-              </button>
-              <button
-                className="profile-modal-btn primary"
-                onClick={handleSaveSettings}
-                disabled={saving}
-              >
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-            </div>
+            <button className="close-x" onClick={() => setSelectedHit(null)}>×</button>
           </div>
         </div>
       )}
