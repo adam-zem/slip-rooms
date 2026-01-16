@@ -9,6 +9,7 @@ import { auth, db } from "./firebase";
 import AuthPage from "./pages/AuthPage";
 import ProfilePage from "./pages/ProfilePage";
 import AdminPage from "./pages/AdminPage";
+import "./pages/GamePage.css"; // Keep styles for the modal
 import { useGames } from "./hooks/useGames";
 import { getPeriodLabel } from "./services/espnService";
 import { awardMessageXP, awardXP, XP_REWARDS } from "./services/xpService";
@@ -34,6 +35,18 @@ import {
 import { getFriends } from "./services/friendsService";
 import { uploadChatImage } from "./services/imageService";
 import { searchGifs, getTrendingGifs, getGifCategories } from "./services/gifService";
+import {
+  subscribeToActiveRooms,
+  subscribeToTrendingRooms,
+  getBettingCategories,
+  COMMON_LINES,
+  joinOrCreateRoom,
+  subscribeToGameRooms,
+} from "./services/roomService";
+import {
+  getPlayersForCategory,
+  getTeamsForGame,
+} from "./services/playerService";
 
 
 
@@ -333,6 +346,25 @@ function App() {
   const [topSweatPhase, setTopSweatPhase] = useState("idle"); // "idle" | "fading-out" | "pause" | "fading-in"
   const [allRooms, setAllRooms] = useState([]); // All rooms across all sports for TOP SWEAT
 
+  // Trending rooms from the new room system (heat map)
+  const [trendingRooms, setTrendingRooms] = useState([]);
+
+  // Game Modal State (betting menu popup)
+  const [gameModalData, setGameModalData] = useState(null); // The game data for the modal
+  const [showPropBuilder, setShowPropBuilder] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [builderStep, setBuilderStep] = useState(1);
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [selectedStat, setSelectedStat] = useState(null);
+  const [selectedLine, setSelectedLine] = useState("");
+  const [customLine, setCustomLine] = useState("");
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [modalPlayers, setModalPlayers] = useState([]);
+  const [modalPlayersLoading, setModalPlayersLoading] = useState(false);
+  const [modalPlayersError, setModalPlayersError] = useState(false);
+  const [manualPlayerName, setManualPlayerName] = useState("");
+  const [gameRoomsForModal, setGameRoomsForModal] = useState([]);
+
   // refs for smart auto-scroll
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -378,6 +410,52 @@ function App() {
       unsubscribe();
     };
   }, [activeRoomId, user]);
+
+  // Subscribe to trending rooms from new room system (heat map)
+  useEffect(() => {
+    const unsubscribe = subscribeToTrendingRooms((rooms) => {
+      setTrendingRooms(rooms);
+    }, 15);
+    return () => unsubscribe();
+  }, []);
+
+  // Subscribe to game rooms when modal is open
+  useEffect(() => {
+    if (!gameModalData?.id) return;
+    const unsubscribe = subscribeToGameRooms(gameModalData.id, setGameRoomsForModal);
+    return () => unsubscribe();
+  }, [gameModalData?.id]);
+
+  // Load players when category is selected in modal
+  useEffect(() => {
+    if (!selectedCategory || !selectedCategory.requiresPlayer || !gameModalData) {
+      setModalPlayers([]);
+      return;
+    }
+
+    async function loadPlayers() {
+      setModalPlayersLoading(true);
+      setModalPlayersError(false);
+      setModalPlayers([]);
+
+      try {
+        const sport = gameModalData?.sport || "nfl";
+        const fetchedPlayers = await getPlayersForCategory(sport, gameModalData, selectedCategory);
+        if (fetchedPlayers.length > 0) {
+          setModalPlayers(fetchedPlayers);
+        } else {
+          setModalPlayersError(true);
+        }
+      } catch (error) {
+        console.error("Error loading players:", error);
+        setModalPlayersError(true);
+      } finally {
+        setModalPlayersLoading(false);
+      }
+    }
+
+    loadPlayers();
+  }, [selectedCategory, gameModalData]);
 
   // Subscribe to ALL rooms for TOP SWEAT tracking + sync user counts to sidebar
   useEffect(() => {
@@ -1005,6 +1083,172 @@ function App() {
     }
   };
 
+  // ============ GAME MODAL HANDLERS ============
+
+  // Open game modal
+  const openGameModal = (gameData) => {
+    setGameModalData(gameData);
+  };
+
+  // Close game modal and reset state
+  const closeGameModal = () => {
+    setGameModalData(null);
+    setShowPropBuilder(false);
+    setSelectedCategory(null);
+    setBuilderStep(1);
+    setSelectedPlayer(null);
+    setSelectedStat(null);
+    setSelectedLine("");
+    setCustomLine("");
+    setModalPlayers([]);
+    setModalPlayersError(false);
+    setManualPlayerName("");
+    setGameRoomsForModal([]);
+  };
+
+  // Handle category click in modal
+  const handleModalCategoryClick = (category) => {
+    if (category.isTrending) {
+      // Scroll to active rooms section
+      const activeRoomsSection = document.querySelector(".game-active-rooms");
+      if (activeRoomsSection) {
+        activeRoomsSection.scrollIntoView({ behavior: "smooth" });
+      }
+      return;
+    }
+
+    setSelectedCategory(category);
+    setShowPropBuilder(true);
+    setModalPlayers([]);
+    setModalPlayersError(false);
+    setManualPlayerName("");
+
+    // For team-based props (game lines), skip player selection
+    if (category.teamBased || !category.requiresPlayer) {
+      setBuilderStep(2);
+      setSelectedPlayer(null);
+    } else {
+      setBuilderStep(1);
+    }
+
+    setSelectedStat(null);
+    setSelectedLine("");
+    setCustomLine("");
+  };
+
+  // Handle player selection
+  const handleModalPlayerSelect = (player) => {
+    setSelectedPlayer(player);
+    setBuilderStep(2);
+  };
+
+  // Handle manual player name submission
+  const handleModalManualPlayerSubmit = () => {
+    if (!manualPlayerName.trim()) return;
+    const manualPlayer = {
+      name: manualPlayerName.trim(),
+      team: "",
+      position: "",
+      isManual: true,
+    };
+    handleModalPlayerSelect(manualPlayer);
+  };
+
+  // Handle team selection (for game lines)
+  const handleModalTeamSelect = (team) => {
+    setSelectedPlayer({ name: team.abbrev, team: team.abbrev, isTeam: true });
+    setBuilderStep(2);
+  };
+
+  // Handle stat selection
+  const handleModalStatSelect = (stat) => {
+    setSelectedStat(stat);
+    if (stat === "Moneyline" || stat === "Draw") {
+      setSelectedLine("YES");
+      setBuilderStep(4);
+    } else {
+      setBuilderStep(3);
+    }
+  };
+
+  // Handle line selection
+  const handleModalLineSelect = (line) => {
+    setSelectedLine(line);
+    setBuilderStep(4);
+  };
+
+  // Handle direction selection and create/join room
+  const handleModalDirectionSelect = async (direction) => {
+    setIsCreatingRoom(true);
+
+    try {
+      const playerName = selectedPlayer?.isTeam
+        ? selectedPlayer.name
+        : selectedPlayer
+        ? `${selectedPlayer.name}${selectedPlayer.team ? ` (${selectedPlayer.team})` : ""}`
+        : gameModalData?.home?.abbrev || "TEAM";
+
+      const result = await joinOrCreateRoom({
+        gameId: gameModalData?.id,
+        gameName: `${gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.abbrev || "HOME"}`,
+        player: playerName,
+        stat: selectedStat,
+        line: selectedLine,
+        direction,
+        sport: gameModalData?.sport || "nfl",
+      });
+
+      // Close modal and select the room
+      closeGameModal();
+      setActiveRoomId(result.roomId);
+      if (isMobile) {
+        setMobileView("chat");
+      }
+    } catch (error) {
+      console.error("Error creating/joining room:", error);
+      alert("Failed to create room. Please try again.");
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
+
+  // Close prop builder within modal
+  const closeModalPropBuilder = () => {
+    setShowPropBuilder(false);
+    setSelectedCategory(null);
+    setBuilderStep(1);
+    setSelectedPlayer(null);
+    setSelectedStat(null);
+    setSelectedLine("");
+    setCustomLine("");
+    setModalPlayers([]);
+    setModalPlayersError(false);
+    setManualPlayerName("");
+  };
+
+  // Go back a step in prop builder
+  const goBackModalStep = () => {
+    if (builderStep === 1 || (builderStep === 2 && !selectedCategory?.requiresPlayer)) {
+      closeModalPropBuilder();
+    } else if (builderStep === 2) {
+      setBuilderStep(1);
+      setSelectedPlayer(null);
+    } else if (builderStep === 3) {
+      setBuilderStep(2);
+      setSelectedStat(null);
+    } else if (builderStep === 4) {
+      if (selectedStat === "Moneyline" || selectedStat === "Draw") {
+        setBuilderStep(2);
+        setSelectedStat(null);
+      } else {
+        setBuilderStep(3);
+      }
+      setSelectedLine("");
+    }
+  };
+
+  // ============ END GAME MODAL HANDLERS ============
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -1227,31 +1471,20 @@ function App() {
           activeMarketId={activeMarketId}
         />
 
+        {/* Trending Rooms Section (Heat Map) */}
         <div className="rooms-header">
-          <h2>Rooms</h2>
-          <button
-            type="button"
-            className="create-room-btn"
-            onClick={() => isAdmin ? setShowCreateRoom(true) : setShowSubmitRoom(true)}
-            disabled={isAdmin ? currentGames.length === 0 : false}
-          >
-            {isAdmin ? "+ Create" : "+ Submit Room"}
-          </button>
+          <h2>🔥 Trending</h2>
         </div>
-        {activeMarket.rooms.length === 0 ? (
+        {trendingRooms.length === 0 ? (
           <div className="empty-rooms">
-            <p>No active rooms</p>
+            <p>No active rooms yet</p>
             <p className="empty-rooms-sub">
-              {gamesLoading
-                ? "Loading games..."
-                : currentGames.length > 0
-                ? `${currentGames.length} games available - create a room!`
-                : "No games scheduled today"}
+              Click a game below to build your first prop!
             </p>
           </div>
         ) : (
-          <ul className="rooms-list">
-            {activeMarket.rooms.map((room) => {
+          <ul className="rooms-list trending-rooms">
+            {trendingRooms.map((room) => {
               const isActive = room.id === activeRoomId;
               return (
                 <li
@@ -1261,10 +1494,9 @@ function App() {
                 >
                   <div className="room-info">
                     <div className="room-name">{room.name}</div>
-                    <div className="room-game">{room.game}</div>
-                    <div className="room-odds">{room.odds}</div>
-                    <div className="room-users">
-                      {room.userCount || 0} {(room.userCount || 0) === 1 ? "user" : "users"}
+                    <div className="room-game">{room.gameName}</div>
+                    <div className="room-users trending-count">
+                      🔥 {room.userCount || 0} sweating
                     </div>
                   </div>
                   {isAdmin && (
@@ -1281,6 +1513,46 @@ function App() {
               );
             })}
           </ul>
+        )}
+
+        {/* Legacy Rooms (existing system) */}
+        {activeMarket.rooms.length > 0 && (
+          <>
+            <div className="rooms-header rooms-header-legacy">
+              <h2>More Rooms</h2>
+            </div>
+            <ul className="rooms-list">
+              {activeMarket.rooms.map((room) => {
+                const isActive = room.id === activeRoomId;
+                return (
+                  <li
+                    key={room.id}
+                    className={isActive ? "room active" : "room"}
+                    onClick={() => handleRoomSelect(room.id)}
+                  >
+                    <div className="room-info">
+                      <div className="room-name">{room.name}</div>
+                      <div className="room-game">{room.game}</div>
+                      <div className="room-odds">{room.odds}</div>
+                      <div className="room-users">
+                        {room.userCount || 0} {(room.userCount || 0) === 1 ? "user" : "users"}
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="room-delete-btn"
+                        onClick={(e) => handleDeleteRoom(e, room.id)}
+                        title="Delete room"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
       </aside>
 
@@ -1515,46 +1787,66 @@ function App() {
           ) : (
             currentGames
               .filter((g) => g.id !== activeGameId)
-              .map((game) => (
-                <div key={game.id} className="game-card">
-                  <div className="game-card-row">
-                    <div className="game-card-team">
-                      {game.awayTeam?.logo && (
-                        <img
-                          src={game.awayTeam.logo}
-                          alt={game.awayTeam.abbreviation}
-                          className="game-card-logo"
-                        />
-                      )}
-                      <span className="game-card-abbr">{game.awayTeam?.abbreviation}</span>
+              .map((game) => {
+                const gameData = {
+                  id: game.id,
+                  away: { abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.displayName, logo: game.awayTeam?.logo },
+                  home: { abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.displayName, logo: game.homeTeam?.logo },
+                  awayScore: game.awayTeam?.score,
+                  homeScore: game.homeTeam?.score,
+                  status: game.isLive ? "live" : game.isFinal ? "final" : "scheduled",
+                  time: game.isLive
+                    ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
+                    : game.isFinal
+                    ? "Final"
+                    : new Date(game.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+                  sport: activeMarketId,
+                };
+                return (
+                  <div
+                    key={game.id}
+                    className="game-card game-card-clickable"
+                    onClick={() => openGameModal(gameData)}
+                  >
+                    <div className="game-card-row">
+                      <div className="game-card-team">
+                        {game.awayTeam?.logo && (
+                          <img
+                            src={game.awayTeam.logo}
+                            alt={game.awayTeam.abbreviation}
+                            className="game-card-logo"
+                          />
+                        )}
+                        <span className="game-card-abbr">{game.awayTeam?.abbreviation}</span>
+                      </div>
+                      <span className="game-card-score">{game.awayTeam?.score}</span>
+                      <span className={"game-card-status" + (game.isLive ? " is-live" : "")}>
+                        {game.isLive
+                          ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
+                          : game.isFinal
+                          ? "Final"
+                          : new Date(game.date).toLocaleTimeString([], {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                      </span>
                     </div>
-                    <span className="game-card-score">{game.awayTeam?.score}</span>
-                    <span className={"game-card-status" + (game.isLive ? " is-live" : "")}>
-                      {game.isLive
-                        ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
-                        : game.isFinal
-                        ? "Final"
-                        : new Date(game.date).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                    </span>
-                  </div>
-                  <div className="game-card-row">
-                    <div className="game-card-team">
-                      {game.homeTeam?.logo && (
-                        <img
-                          src={game.homeTeam.logo}
-                          alt={game.homeTeam.abbreviation}
-                          className="game-card-logo"
-                        />
-                      )}
-                      <span className="game-card-abbr">{game.homeTeam?.abbreviation}</span>
+                    <div className="game-card-row">
+                      <div className="game-card-team">
+                        {game.homeTeam?.logo && (
+                          <img
+                            src={game.homeTeam.logo}
+                            alt={game.homeTeam.abbreviation}
+                            className="game-card-logo"
+                          />
+                        )}
+                        <span className="game-card-abbr">{game.homeTeam?.abbreviation}</span>
+                      </div>
+                      <span className="game-card-score">{game.homeTeam?.score}</span>
                     </div>
-                    <span className="game-card-score">{game.homeTeam?.score}</span>
                   </div>
-                </div>
-              ))
+                );
+              })
           )}
         </div>
       </aside>
@@ -2292,6 +2584,357 @@ function App() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Game Modal (Betting Menu Popup) */}
+      {gameModalData && (
+        <div className="game-modal-overlay" onClick={closeGameModal}>
+          <div className="game-modal" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="game-modal-header">
+              <button className="game-modal-close" onClick={closeGameModal}>
+                ×
+              </button>
+
+              <div className="game-modal-matchup">
+                <div className="game-modal-team away">
+                  {gameModalData?.away?.logo && (
+                    <img src={gameModalData.away.logo} alt="" className="game-modal-logo" />
+                  )}
+                  <span className="game-modal-abbrev">{gameModalData?.away?.abbrev || "AWAY"}</span>
+                </div>
+
+                <div className="game-modal-vs">
+                  {gameModalData?.status === "live" ? (
+                    <div className="game-modal-score">
+                      <span>{gameModalData?.awayScore || 0}</span>
+                      <span className="score-divider">-</span>
+                      <span>{gameModalData?.homeScore || 0}</span>
+                    </div>
+                  ) : (
+                    <span className="vs-text">VS</span>
+                  )}
+                </div>
+
+                <div className="game-modal-team home">
+                  {gameModalData?.home?.logo && (
+                    <img src={gameModalData.home.logo} alt="" className="game-modal-logo" />
+                  )}
+                  <span className="game-modal-abbrev">{gameModalData?.home?.abbrev || "HOME"}</span>
+                </div>
+              </div>
+
+              <div className="game-modal-time">
+                {gameModalData?.status === "live" ? (
+                  <span className="live-indicator">LIVE - {gameModalData?.time}</span>
+                ) : (
+                  <span>{gameModalData?.time || "TBD"}</span>
+                )}
+              </div>
+            </div>
+
+            {/* Betting Menu */}
+            <div className="game-modal-menu">
+              <h2 className="betting-menu-title">THE BETTING MENU</h2>
+              <p className="betting-menu-subtitle">Pick your prop, join the sweat</p>
+
+              <div className="betting-categories">
+                {getBettingCategories(gameModalData?.sport || "nfl").map((category) => (
+                  <button
+                    key={category.id}
+                    className={`betting-category ${category.isTrending ? "trending" : ""}`}
+                    onClick={() => handleModalCategoryClick(category)}
+                  >
+                    <span className="category-emoji">{category.emoji}</span>
+                    <div className="category-info">
+                      <span className="category-name">{category.name}</span>
+                      <span className="category-desc">{category.description}</span>
+                    </div>
+                    <span className="category-arrow">→</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Active Rooms for this Game */}
+            {gameRoomsForModal.length > 0 && (
+              <div className="game-active-rooms">
+                <h3 className="active-rooms-title">🔥 Active Rooms</h3>
+                <div className="active-rooms-list">
+                  {gameRoomsForModal.slice(0, 5).map((room) => (
+                    <button
+                      key={room.id}
+                      className="active-room-card"
+                      onClick={() => {
+                        closeGameModal();
+                        setActiveRoomId(room.id);
+                        if (isMobile) setMobileView("chat");
+                      }}
+                    >
+                      <span className="room-name">{room.name}</span>
+                      <span className="room-users">{room.userCount || 0} sweating</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Prop Builder (nested modal within game modal) */}
+            {showPropBuilder && (
+              <div className="prop-builder-overlay" onClick={closeModalPropBuilder}>
+                <div className="prop-builder-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="prop-builder-header">
+                    <button className="prop-builder-back" onClick={goBackModalStep}>
+                      ← Back
+                    </button>
+                    <h2>
+                      {selectedCategory?.emoji} {selectedCategory?.name}
+                    </h2>
+                    <button className="prop-builder-close" onClick={closeModalPropBuilder}>
+                      ×
+                    </button>
+                  </div>
+
+                  <div className="prop-builder-progress">
+                    {selectedCategory?.requiresPlayer && (
+                      <div className={`progress-step ${builderStep >= 1 ? "active" : ""}`}>
+                        Player
+                      </div>
+                    )}
+                    <div className={`progress-step ${builderStep >= 2 ? "active" : ""}`}>
+                      Stat
+                    </div>
+                    <div className={`progress-step ${builderStep >= 3 ? "active" : ""}`}>
+                      Line
+                    </div>
+                    <div className={`progress-step ${builderStep >= 4 ? "active" : ""}`}>
+                      Pick
+                    </div>
+                  </div>
+
+                  <div className="prop-builder-content">
+                    {/* Step 1: Pick Player */}
+                    {builderStep === 1 && selectedCategory?.requiresPlayer && (
+                      <div className="builder-step">
+                        <h3>Pick a Player</h3>
+
+                        {modalPlayersLoading && (
+                          <div className="players-loading">
+                            <div className="loading-spinner"></div>
+                            <p>Loading players...</p>
+                          </div>
+                        )}
+
+                        {!modalPlayersLoading && modalPlayersError && (
+                          <div className="players-error">
+                            <p>Couldn't load players - type player name manually</p>
+                            <div className="manual-player-input">
+                              <input
+                                type="text"
+                                placeholder="Enter player name..."
+                                value={manualPlayerName}
+                                onChange={(e) => setManualPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
+                              />
+                              <button
+                                onClick={handleModalManualPlayerSubmit}
+                                disabled={!manualPlayerName.trim()}
+                              >
+                                Use
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {!modalPlayersLoading && !modalPlayersError && modalPlayers.length > 0 && (
+                          <div className="player-grid">
+                            {modalPlayers.slice(0, 16).map((player, idx) => (
+                              <button
+                                key={player.id || `${player.name}-${idx}`}
+                                className="player-btn"
+                                onClick={() => handleModalPlayerSelect(player)}
+                              >
+                                <span className="player-name">{player.name}</span>
+                                <span className="player-team">
+                                  {player.position && `${player.position} · `}{player.team}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {!modalPlayersLoading && !modalPlayersError && modalPlayers.length === 0 && (
+                          <div className="players-error">
+                            <p>No players found - type player name manually</p>
+                            <div className="manual-player-input">
+                              <input
+                                type="text"
+                                placeholder="Enter player name..."
+                                value={manualPlayerName}
+                                onChange={(e) => setManualPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
+                              />
+                              <button
+                                onClick={handleModalManualPlayerSubmit}
+                                disabled={!manualPlayerName.trim()}
+                              >
+                                Use
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Always show manual input option */}
+                        {!modalPlayersLoading && modalPlayers.length > 0 && (
+                          <div className="manual-player-option">
+                            <p>Don't see your player?</p>
+                            <div className="manual-player-input">
+                              <input
+                                type="text"
+                                placeholder="Type name..."
+                                value={manualPlayerName}
+                                onChange={(e) => setManualPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
+                              />
+                              <button
+                                onClick={handleModalManualPlayerSubmit}
+                                disabled={!manualPlayerName.trim()}
+                              >
+                                Use
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Step 1 for Team-based props (Game Lines) */}
+                    {builderStep === 2 && selectedCategory?.teamBased && !selectedPlayer && (
+                      <div className="builder-step">
+                        <h3>Pick a Team</h3>
+                        <div className="team-grid">
+                          {getTeamsForGame(gameModalData).map((team) => (
+                            <button
+                              key={team.abbrev}
+                              className="team-btn"
+                              onClick={() => handleModalTeamSelect(team)}
+                            >
+                              <span className="team-name">{team.name}</span>
+                              <span className="team-tag">{team.isHome ? "HOME" : "AWAY"}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 2: Pick Stat */}
+                    {builderStep === 2 && (selectedPlayer || !selectedCategory?.requiresPlayer) && (
+                      <div className="builder-step">
+                        <h3>Pick a Stat</h3>
+                        {selectedPlayer && (
+                          <div className="selected-info">
+                            {selectedPlayer.name}
+                            {selectedPlayer.team && !selectedPlayer.isTeam && ` (${selectedPlayer.team})`}
+                          </div>
+                        )}
+                        <div className="stat-grid">
+                          {selectedCategory?.stats.map((stat) => (
+                            <button
+                              key={stat}
+                              className="stat-btn"
+                              onClick={() => handleModalStatSelect(stat)}
+                            >
+                              {stat}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 3: Pick Line */}
+                    {builderStep === 3 && (
+                      <div className="builder-step">
+                        <h3>Pick a Line</h3>
+                        <div className="selected-info">
+                          {selectedPlayer?.name} - {selectedStat}
+                        </div>
+                        <div className="line-grid">
+                          {(COMMON_LINES[selectedStat] || []).map((line) => (
+                            <button
+                              key={line}
+                              className={`line-btn ${selectedLine === line ? "selected" : ""}`}
+                              onClick={() => handleModalLineSelect(line)}
+                            >
+                              {line}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="custom-line">
+                          <input
+                            type="number"
+                            step="0.5"
+                            placeholder="Custom line..."
+                            value={customLine}
+                            onChange={(e) => setCustomLine(e.target.value)}
+                          />
+                          <button
+                            className="custom-line-btn"
+                            disabled={!customLine}
+                            onClick={() => handleModalLineSelect(customLine)}
+                          >
+                            Use
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step 4: Pick Over/Under */}
+                    {builderStep === 4 && (
+                      <div className="builder-step">
+                        <h3>Make Your Pick</h3>
+                        <div className="selected-info final">
+                          <span className="pick-player">{selectedPlayer?.name}</span>
+                          <span className="pick-stat">{selectedStat}</span>
+                          {selectedLine !== "YES" && (
+                            <span className="pick-line">{selectedLine}</span>
+                          )}
+                        </div>
+                        <div className="direction-buttons">
+                          {selectedStat === "Moneyline" || selectedStat === "Draw" ? (
+                            <button
+                              className="direction-btn yes"
+                              onClick={() => handleModalDirectionSelect("YES")}
+                              disabled={isCreatingRoom}
+                            >
+                              {isCreatingRoom ? "Creating..." : "🔥 SWEAT THIS"}
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                className="direction-btn over"
+                                onClick={() => handleModalDirectionSelect("OVER")}
+                                disabled={isCreatingRoom}
+                              >
+                                {isCreatingRoom ? "..." : "⬆️ OVER"}
+                              </button>
+                              <button
+                                className="direction-btn under"
+                                onClick={() => handleModalDirectionSelect("UNDER")}
+                                disabled={isCreatingRoom}
+                              >
+                                {isCreatingRoom ? "..." : "⬇️ UNDER"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
