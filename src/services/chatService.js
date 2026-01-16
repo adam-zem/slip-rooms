@@ -130,17 +130,36 @@ export async function getRoomsBySport(sportId) {
 
 /**
  * Send a message to a room
+ * Supports different message types: text, image, gif
+ * @param {string} roomId - Room ID
+ * @param {object} message - Message object with type and content
  */
 export async function sendMessage(roomId, message) {
   const messagesRef = collection(db, "rooms", roomId, "messages");
 
-  const docRef = await addDoc(messagesRef, {
+  // Build message document based on type
+  const messageDoc = {
     username: message.username,
-    text: message.text,
-    oddie: message.oddie || null, // User's emoji/avatar
+    oddie: message.oddie || null,
     timestamp: serverTimestamp(),
     userId: message.userId || null,
-  });
+    type: message.type || "text", // text, image, gif
+  };
+
+  // Add type-specific fields
+  if (message.type === "image") {
+    messageDoc.imageUrl = message.imageUrl;
+    messageDoc.text = null;
+  } else if (message.type === "gif") {
+    messageDoc.gifUrl = message.gifUrl;
+    messageDoc.text = null;
+  } else {
+    // Default to text type
+    messageDoc.text = message.text;
+    messageDoc.type = "text";
+  }
+
+  const docRef = await addDoc(messagesRef, messageDoc);
 
   return docRef.id;
 }

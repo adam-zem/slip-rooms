@@ -32,6 +32,8 @@ import {
   markConversationAsRead,
 } from "./services/dmService";
 import { getFriends } from "./services/friendsService";
+import { uploadChatImage } from "./services/imageService";
+import { searchGifs, getTrendingGifs, getGifCategories } from "./services/gifService";
 
 
 
@@ -274,6 +276,16 @@ function App() {
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [newMessage, setNewMessage] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  // Media (image/GIF) state
+  const [showMediaMenu, setShowMediaMenu] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const [gifSearchQuery, setGifSearchQuery] = useState("");
+  const [gifResults, setGifResults] = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Create room modal state (for admins)
   const [showCreateRoom, setShowCreateRoom] = useState(false);
@@ -843,6 +855,119 @@ function App() {
     setNewMessage((prev) => prev + emoji);
   };
 
+  // ------------------- MEDIA HANDLERS -------------------
+
+  // Handle image file selection
+  const handleImageSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeRoomId) return;
+
+    const username = (profile.displayName || "Guest").trim() || "Guest";
+
+    try {
+      setUploadProgress(0);
+      setShowMediaMenu(false);
+
+      // Upload image
+      const imageUrl = await uploadChatImage(
+        file,
+        activeRoomId,
+        profile.avatarEmoji,
+        (progress) => setUploadProgress(progress)
+      );
+
+      // Send image message
+      await sendMessageToFirestore(activeRoomId, {
+        type: "image",
+        imageUrl,
+        username,
+        oddie: profile.avatarEmoji,
+        userId: user?.uid || null,
+      });
+
+      // Award XP
+      if (user?.uid) {
+        awardMessageXP(user.uid).catch((err) =>
+          console.error("XP award failed:", err)
+        );
+      }
+    } catch (err) {
+      console.error("Failed to upload image:", err);
+      alert(err.message || "Failed to upload image");
+    } finally {
+      setUploadProgress(null);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  // Open GIF picker and load trending GIFs
+  const handleOpenGifPicker = async () => {
+    setShowMediaMenu(false);
+    setShowGifPicker(true);
+    setGifSearchQuery("");
+    setGifLoading(true);
+
+    try {
+      const trending = await getTrendingGifs(20);
+      setGifResults(trending);
+    } catch (err) {
+      console.error("Failed to load GIFs:", err);
+    } finally {
+      setGifLoading(false);
+    }
+  };
+
+  // Search for GIFs
+  const handleGifSearch = async (query) => {
+    setGifSearchQuery(query);
+    setGifLoading(true);
+
+    try {
+      const results = await searchGifs(query, 20);
+      setGifResults(results);
+    } catch (err) {
+      console.error("GIF search failed:", err);
+    } finally {
+      setGifLoading(false);
+    }
+  };
+
+  // Send a GIF message
+  const handleSendGif = async (gif) => {
+    if (!activeRoomId) return;
+
+    const username = (profile.displayName || "Guest").trim() || "Guest";
+
+    try {
+      setShowGifPicker(false);
+
+      await sendMessageToFirestore(activeRoomId, {
+        type: "gif",
+        gifUrl: gif.url,
+        username,
+        oddie: profile.avatarEmoji,
+        userId: user?.uid || null,
+      });
+
+      // Award XP
+      if (user?.uid) {
+        awardMessageXP(user.uid).catch((err) =>
+          console.error("XP award failed:", err)
+        );
+      }
+    } catch (err) {
+      console.error("Failed to send GIF:", err);
+    }
+  };
+
+  // Quick category search
+  const handleGifCategory = (query) => {
+    handleGifSearch(query);
+  };
+
   const handleMarketChange = (marketId) => {
     setFadeKey(Date.now());
     setActiveMarketId(marketId);
@@ -1218,8 +1343,35 @@ function App() {
                   </div>
 
                   {cluster.messages.map((msg) => (
-                    <div key={msg.id} className="message message-bubble">
-                      <div className="message-text">{msg.text}</div>
+                    <div key={msg.id} className={`message message-bubble ${msg.type === "image" || msg.type === "gif" ? "message-media" : ""}`}>
+                      {/* Text message */}
+                      {(!msg.type || msg.type === "text") && (
+                        <div className="message-text">{msg.text}</div>
+                      )}
+                      {/* Image message */}
+                      {msg.type === "image" && msg.imageUrl && (
+                        <div className="message-image-container">
+                          <img
+                            src={msg.imageUrl}
+                            alt="Shared image"
+                            className="message-image"
+                            loading="lazy"
+                            onClick={() => setLightboxImage(msg.imageUrl)}
+                          />
+                        </div>
+                      )}
+                      {/* GIF message */}
+                      {msg.type === "gif" && msg.gifUrl && (
+                        <div className="message-gif-container">
+                          <img
+                            src={msg.gifUrl}
+                            alt="GIF"
+                            className="message-gif"
+                            loading="lazy"
+                            onClick={() => setLightboxImage(msg.gifUrl)}
+                          />
+                        </div>
+                      )}
                     </div>
                   ))}
               </div>
@@ -1234,6 +1386,14 @@ function App() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Upload progress indicator */}
+          {uploadProgress !== null && (
+            <div className="upload-progress">
+              <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+              <span className="upload-progress-text">Uploading... {uploadProgress}%</span>
+            </div>
+          )}
+
           {/* Input */}
           <div className="input-row">
             <button
@@ -1243,6 +1403,39 @@ function App() {
             >
               😀
             </button>
+
+            {/* Media button */}
+            <div className="media-btn-container">
+              <button
+                type="button"
+                className="media-toggle"
+                onClick={() => setShowMediaMenu((prev) => !prev)}
+              >
+                📷
+              </button>
+              {showMediaMenu && (
+                <div className="media-menu">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    🖼️ Upload Image
+                  </button>
+                  <button type="button" onClick={handleOpenGifPicker}>
+                    🎬 Send GIF
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Hidden file input for image uploads */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              onChange={handleImageSelect}
+              style={{ display: "none" }}
+            />
 
             <input
               type="text"
@@ -1808,6 +2001,77 @@ function App() {
             </button>
           </div>
         </div>
+      </div>
+    )}
+
+    {/* GIF PICKER MODAL */}
+    {showGifPicker && (
+      <div
+        className="modal-overlay gif-overlay"
+        onClick={(e) => e.target === e.currentTarget && setShowGifPicker(false)}
+      >
+        <div className="gif-picker-modal">
+          <div className="gif-picker-header">
+            <h2>Send a GIF</h2>
+            <button className="gif-close" onClick={() => setShowGifPicker(false)}>×</button>
+          </div>
+
+          <input
+            type="text"
+            className="gif-search-input"
+            placeholder="Search GIFs..."
+            value={gifSearchQuery}
+            onChange={(e) => handleGifSearch(e.target.value)}
+            autoFocus
+          />
+
+          <div className="gif-categories">
+            {getGifCategories().map((cat) => (
+              <button
+                key={cat.query}
+                type="button"
+                className="gif-category-btn"
+                onClick={() => handleGifCategory(cat.query)}
+              >
+                {cat.emoji}
+              </button>
+            ))}
+          </div>
+
+          <div className="gif-results">
+            {gifLoading ? (
+              <div className="gif-loading">Loading...</div>
+            ) : gifResults.length === 0 ? (
+              <div className="gif-empty">No GIFs found</div>
+            ) : (
+              gifResults.map((gif) => (
+                <button
+                  key={gif.id}
+                  type="button"
+                  className="gif-result-item"
+                  onClick={() => handleSendGif(gif)}
+                >
+                  <img src={gif.previewUrl} alt={gif.title} loading="lazy" />
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className="gif-attribution">
+            Powered by GIPHY
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* LIGHTBOX MODAL */}
+    {lightboxImage && (
+      <div
+        className="lightbox-overlay"
+        onClick={() => setLightboxImage(null)}
+      >
+        <button className="lightbox-close" onClick={() => setLightboxImage(null)}>×</button>
+        <img src={lightboxImage} alt="Full size" className="lightbox-image" />
       </div>
     )}
 

@@ -8,6 +8,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { getProfile, updateProfile, createProfileIfMissing } from "../services/profileService";
 import { getFriends, sendFriendRequest, removeFriend, checkFriendship, getPendingRequests, acceptFriendRequest, declineFriendRequest } from "../services/friendsService";
 import { getGreatestHits, addGreatestHit, deleteGreatestHit, fileToBase64 } from "../services/greatestHitsService";
+import { deleteUserAccount } from "../services/accountService";
 import "./ProfilePage.css";
 
 function getLevelEmoji(level) {
@@ -43,6 +44,9 @@ function ProfilePage() {
   const [showFriends, setShowFriends] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [selectedHit, setSelectedHit] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Editing
   const [editingBio, setEditingBio] = useState(false);
@@ -294,6 +298,28 @@ function ProfilePage() {
     navigate("/");
   };
 
+  // Delete account handler
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== "DELETE" && deleteConfirmText !== profile?.username) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await deleteUserAccount(user.uid);
+      // User will be signed out automatically after auth deletion
+      navigate("/");
+    } catch (err) {
+      console.error("Delete account error:", err);
+      if (err.code === "auth/requires-recent-login") {
+        alert("For security reasons, please log out and log back in before deleting your account.");
+      } else {
+        alert("Failed to delete account. Please try again.");
+      }
+      setIsDeleting(false);
+    }
+  };
+
   const isPrivate = !isOwnProfile && profile && !profile.publicProfile && !isFriend;
 
   // Loading states
@@ -537,6 +563,13 @@ function ProfilePage() {
               </button>
             )}
             <button className="btn logout-btn" onClick={handleLogout}>🚪 Log Out</button>
+            <div className="settings-divider" />
+            <button
+              className="btn delete-account-btn"
+              onClick={() => { setShowSettings(false); setShowDeleteConfirm(true); }}
+            >
+              Delete Account
+            </button>
             <button className="btn modal-close" onClick={() => setShowSettings(false)}>Close</button>
           </div>
         </div>
@@ -644,6 +677,48 @@ function ProfilePage() {
               )}
             </div>
             <button className="close-x" onClick={() => setSelectedHit(null)}>×</button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="modal-overlay" onClick={() => !isDeleting && setShowDeleteConfirm(false)}>
+          <div className="modal delete-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-warning-icon">⚠️</div>
+            <h2 className="delete-title">Delete Account</h2>
+            <p className="delete-warning">
+              Are you sure you want to delete your account? This action cannot be undone.
+              All your data, messages, friends, and greatest hits will be permanently deleted.
+            </p>
+            <p className="delete-instruction">
+              Type <strong>DELETE</strong> or your username <strong>{profile?.username}</strong> to confirm:
+            </p>
+            <input
+              type="text"
+              className="input delete-confirm-input"
+              placeholder="Type DELETE or your username"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              disabled={isDeleting}
+              autoComplete="off"
+            />
+            <div className="modal-actions">
+              <button
+                className="btn"
+                onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn delete-confirm-btn"
+                onClick={handleDeleteAccount}
+                disabled={isDeleting || (deleteConfirmText !== "DELETE" && deleteConfirmText !== profile?.username)}
+              >
+                {isDeleting ? "Deleting..." : "Delete Account"}
+              </button>
+            </div>
           </div>
         </div>
       )}

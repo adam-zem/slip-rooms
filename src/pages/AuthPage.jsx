@@ -1,10 +1,11 @@
 // src/pages/AuthPage.jsx
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
+  sendEmailVerification,
   signInWithPopup,
   GoogleAuthProvider,
   OAuthProvider,
@@ -50,10 +51,11 @@ const appleProvider = new OAuthProvider("apple.com");
 export default function AuthPage() {
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState("login"); // "login" | "signup" | "forgot" | "username"
+  const [mode, setMode] = useState("login"); // "login" | "signup" | "forgot" | "username" | "verify"
   const isSignup = mode === "signup";
   const isForgot = mode === "forgot";
   const isUsernamePrompt = mode === "username";
+  const isVerify = mode === "verify";
 
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -66,6 +68,20 @@ export default function AuthPage() {
 
   // For social login username prompt
   const [pendingSocialUser, setPendingSocialUser] = useState(null);
+
+  // For email verification
+  const [verificationEmail, setVerificationEmail] = useState("");
+  const [lastResendTime, setLastResendTime] = useState(0);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  // Cooldown timer effect
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setTimeout(() => {
+      setResendCooldown((prev) => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
 
   // Generate matrix characters once on mount
   const matrixChars = useMemo(() => generateMatrixChars(80), []);
@@ -202,6 +218,19 @@ export default function AuthPage() {
           createdAt: new Date().toISOString(),
           provider: "email",
         });
+
+        // Send verification email with custom action URL
+        const actionCodeSettings = {
+          url: `${window.location.origin}/auth/action`,
+          handleCodeInApp: true,
+        };
+        await sendEmailVerification(userCred.user, actionCodeSettings);
+
+        // Show verification screen
+        setVerificationEmail(cleanEmail);
+        setMode("verify");
+        setLoading(false);
+        return;
       } else {
         await signInWithEmailAndPassword(auth, cleanEmail, password);
       }
@@ -209,6 +238,64 @@ export default function AuthPage() {
       navigate("/", { replace: true });
     } catch (err) {
       setError(err?.message || "Authentication failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle resending verification email
+  const handleResendVerification = async () => {
+    const now = Date.now();
+    const cooldownMs = 60000; // 60 second cooldown
+
+    if (now - lastResendTime < cooldownMs) {
+      const remaining = Math.ceil((cooldownMs - (now - lastResendTime)) / 1000);
+      setError(`Please wait ${remaining} seconds before resending`);
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+
+    try {
+      if (auth.currentUser) {
+        const actionCodeSettings = {
+          url: `${window.location.origin}/auth/action`,
+          handleCodeInApp: true,
+        };
+        await sendEmailVerification(auth.currentUser, actionCodeSettings);
+        setLastResendTime(now);
+        setSuccess("Verification email sent!");
+        // Start cooldown timer display
+        setResendCooldown(60);
+      }
+    } catch (err) {
+      if (err.code === "auth/too-many-requests") {
+        setError("Too many requests. Please wait a few minutes.");
+      } else {
+        setError(err?.message || "Failed to send verification email.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle checking if verified
+  const handleCheckVerification = async () => {
+    setError("");
+    setLoading(true);
+
+    try {
+      if (auth.currentUser) {
+        await auth.currentUser.reload();
+        if (auth.currentUser.emailVerified) {
+          navigate("/", { replace: true });
+        } else {
+          setError("Email not verified yet. Please check your inbox.");
+        }
+      }
+    } catch (err) {
+      setError(err?.message || "Failed to check verification status.");
     } finally {
       setLoading(false);
     }
@@ -354,6 +441,98 @@ export default function AuthPage() {
               Back to login
             </button>
           </form>
+        </div>
+
+        <footer className="auth-legal">
+          <p>
+            SlipRooms is a social community for sports fans to connect and chat.
+            This is NOT a gambling platform. We do not accept bets, process wagers,
+            or handle any real money transactions.
+          </p>
+        </footer>
+      </div>
+    );
+  }
+
+  // Render email verification screen
+  if (isVerify) {
+    return (
+      <div className="auth-page">
+        {/* Matrix Rain Background */}
+        <div className="auth-matrix-rain" aria-hidden="true">
+          {matrixChars.map((item, i) => (
+            <span
+              key={i}
+              className="auth-matrix-char"
+              style={{
+                left: `${item.left}%`,
+                animationDelay: `${item.delay}s`,
+                animationDuration: `${item.duration}s`,
+                opacity: item.opacity,
+              }}
+            >
+              {item.char}
+            </span>
+          ))}
+        </div>
+
+        <div className="auth-container">
+          <div className="auth-header">
+            <h1 className="auth-logo">SLIPROOMS</h1>
+            <p className="auth-tagline">verify your email</p>
+          </div>
+
+          <div className="auth-verify-content">
+            <div className="auth-verify-icon">📧</div>
+            <h2 className="auth-verify-title">Check your inbox</h2>
+            <p className="auth-verify-message">
+              We sent a verification link to<br />
+              <strong>{verificationEmail}</strong>
+            </p>
+            <p className="auth-verify-instruction">
+              Click the link in the email to verify your account.
+            </p>
+
+            {error && <div className="auth-error">{error}</div>}
+            {success && <div className="auth-success">{success}</div>}
+
+            <button
+              type="button"
+              className="auth-submit"
+              onClick={handleCheckVerification}
+              disabled={loading}
+            >
+              {loading ? (
+                <span className="auth-loading">
+                  <span className="auth-spinner"></span>
+                  Checking...
+                </span>
+              ) : (
+                "I've Verified"
+              )}
+            </button>
+
+            <button
+              type="button"
+              className="auth-resend-btn"
+              onClick={handleResendVerification}
+              disabled={loading || resendCooldown > 0}
+            >
+              {resendCooldown > 0 ? `Resend Email (${resendCooldown}s)` : "Resend Email"}
+            </button>
+
+            <button
+              type="button"
+              className="auth-back-link"
+              onClick={() => {
+                setMode("login");
+                setError("");
+                setSuccess("");
+              }}
+            >
+              Back to login
+            </button>
+          </div>
         </div>
 
         <footer className="auth-legal">

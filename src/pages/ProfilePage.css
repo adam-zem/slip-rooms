@@ -601,6 +601,95 @@
   border-color: var(--matrix-green);
 }
 
+/* Settings Divider */
+.settings-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 16px 0;
+}
+
+/* Delete Account Button in Settings */
+.modal .delete-account-btn {
+  width: 100%;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.modal .delete-account-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+/* Delete Account Confirmation Modal */
+.delete-modal {
+  text-align: center;
+}
+
+.delete-warning-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+}
+
+.delete-title {
+  color: #ef4444 !important;
+  margin-bottom: 16px !important;
+}
+
+.delete-warning {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 20px;
+  padding: 16px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+}
+
+.delete-instruction {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.delete-instruction strong {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.delete-confirm-input {
+  text-align: center;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+.delete-confirm-input:focus {
+  border-color: #ef4444;
+}
+
+.delete-confirm-btn {
+  background: #ef4444 !important;
+  border-color: #ef4444 !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.delete-confirm-btn:hover:not(:disabled) {
+  background: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+.delete-confirm-btn:disabled {
+  background: rgba(239, 68, 68, 0.3) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  cursor: not-allowed;
+}
+
 /* Friends Modal */
 .friends-list {
   display: flex;

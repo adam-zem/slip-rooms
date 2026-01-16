@@ -11,5 +11,15 @@ service firebase.storage {
         && request.resource.size < 5 * 1024 * 1024 // Max 5MB
         && request.resource.contentType.matches('image/.*'); // Only images
     }
+
+    // Room chat images - any authenticated user can upload
+    match /roomImages/{roomId}/{imageFile} {
+      // Anyone authenticated can read room images
+      allow read: if request.auth != null;
+      // Any authenticated user can upload images to rooms
+      allow write: if request.auth != null
+        && request.resource.size < 2 * 1024 * 1024 // Max 2MB
+        && request.resource.contentType.matches('image/.*'); // Only images
+    }
   }
 }
