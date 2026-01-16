@@ -371,7 +371,9 @@ function App() {
 
   // Compute these early so useEffects can use them
   const activeMarket = markets.find((m) => m.id === activeMarketId) || markets[0];
-  const activeRoom = activeRoomId ? activeMarket.rooms.find((r) => r.id === activeRoomId) : null;
+  const activeRoom = activeRoomId
+    ? (activeMarket.rooms.find((r) => r.id === activeRoomId) || trendingRooms.find((r) => r.id === activeRoomId))
+    : null;
   // Use live messages from Firestore instead of local state
   const activeMessages = liveMessages;
 
