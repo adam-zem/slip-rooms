@@ -1,7 +1,7 @@
 // src/contexts/AuthContext.jsx
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 
 // Admin email addresses
@@ -93,7 +93,7 @@ export function AuthProvider({ children }) {
       isAdmin,
       refreshProfile,
     }),
-    [user, userProfile, authReady, profileLoading, needsUsername, isAdmin]
+    [user, userProfile, authReady, profileLoading, needsUsername, isAdmin, refreshProfile]
   );
 
   return (

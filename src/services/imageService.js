@@ -118,7 +118,7 @@ export async function uploadChatImage(file, roomId, oddie, onProgress) {
         try {
           const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
           resolve(downloadURL);
-        } catch (err) {
+        } catch {
           reject(new Error("Failed to get image URL."));
         }
       }

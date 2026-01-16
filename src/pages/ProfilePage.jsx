@@ -22,7 +22,7 @@ function getLevelEmoji(level) {
 function ProfilePage() {
   const { userId: paramUserId } = useParams();
   const navigate = useNavigate();
-  const { user, userProfile, authReady, refreshProfile, isAdmin } = useAuth();
+  const { user, userProfile, authReady, isAdmin } = useAuth();
 
   const isOwnProfile = !paramUserId || paramUserId === user?.uid;
   const targetUserId = paramUserId || user?.uid;
@@ -37,7 +37,6 @@ function ProfilePage() {
 
   // Friend requests (only for own profile)
   const [friendRequests, setFriendRequests] = useState([]);
-  const [requestsLoading, setRequestsLoading] = useState(false);
 
   // Modals
   const [showSettings, setShowSettings] = useState(false);
@@ -117,14 +116,11 @@ function ProfilePage() {
   useEffect(() => {
     async function loadRequests() {
       if (!isOwnProfile || !user?.uid) return;
-      setRequestsLoading(true);
       try {
         const requests = await getPendingRequests(user.uid);
         setFriendRequests(requests);
       } catch (err) {
         console.error("Error loading friend requests:", err);
-      } finally {
-        setRequestsLoading(false);
       }
     }
     loadRequests();

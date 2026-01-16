@@ -10,7 +10,7 @@ import {
   where,
   writeBatch,
 } from "firebase/firestore";
-import { ref, deleteObject, listAll } from "firebase/storage";
+import { ref, deleteObject } from "firebase/storage";
 import { deleteUser } from "firebase/auth";
 import { db, storage, auth } from "../firebase";
 

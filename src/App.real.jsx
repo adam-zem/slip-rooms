@@ -316,9 +316,6 @@ function App() {
   const [mobileView, setMobileView] = useState("rooms"); // "rooms" | "chat" | "games"
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
-  // Slip status (live game tracking for current room)
-  const [isLiveExpanded, setIsLiveExpanded] = useState(true);
-
   // profile state - will be updated when userProfile loads
   const [profile, setProfile] = useState(defaultProfile);
   const [draftProfile, setDraftProfile] = useState(defaultProfile);
@@ -330,7 +327,6 @@ function App() {
 
   // Real-time messages from Firestore
   const [liveMessages, setLiveMessages] = useState([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
 
   // TOP SWEAT banner state (for transition effects)
   const [displayedTopSweat, setDisplayedTopSweat] = useState(null);
@@ -372,12 +368,9 @@ function App() {
       return;
     }
 
-    setMessagesLoading(true);
-
     // Subscribe to messages - this returns an unsubscribe function
     const unsubscribe = subscribeToMessages(activeRoomId, (messages) => {
       setLiveMessages(messages);
-      setMessagesLoading(false);
     });
 
     // Cleanup: unsubscribe when room changes or component unmounts
@@ -1053,13 +1046,6 @@ function App() {
   const openProfile = () => {
     // Navigate to the new profile page instead of opening the old sheet
     navigate("/profile");
-  };
-
-  // Legacy profile sheet opener (keep for backward compatibility)
-  const openProfileSheet = () => {
-    setDraftProfile(profile);
-    setShowAvatarChoices(true);
-    setIsProfileOpen(true);
   };
 
   const closeProfile = () => {
