@@ -22,7 +22,11 @@ import {
   joinRoom,
   leaveRoom,
   subscribeToAllRooms,
+  cleanupOnUnload,
 } from "./services/chatService";
+import {
+  cleanupStalePresence,
+} from "./services/presenceService";
 import { submitRoom } from "./services/roomSubmissionsService";
 import {
   subscribeToConversations,
@@ -281,7 +285,7 @@ function App() {
   const navigate = useNavigate();
 
   // ESPN games hook
-  const { gamesBySport, loading: gamesLoading, getGameById, refresh: refreshGames } = useGames();
+  const { gamesBySport, loading: gamesLoading, getGameById, refresh: refreshGames, getActiveGames, getRecentGames, getLiveGamesForSport, getUpcomingGames } = useGames();
 
   // All hooks must be called unconditionally at the top
   const [markets, setMarkets] = useState(initialMarkets);
@@ -362,7 +366,7 @@ function App() {
   const [modalPlayers, setModalPlayers] = useState([]);
   const [modalPlayersLoading, setModalPlayersLoading] = useState(false);
   const [modalPlayersError, setModalPlayersError] = useState(false);
-  const [manualPlayerName, setManualPlayerName] = useState("");
+  const [playerSearchQuery, setPlayerSearchQuery] = useState(""); // For filtering player list
   const [gameRoomsForModal, setGameRoomsForModal] = useState([]);
 
   // refs for smart auto-scroll
@@ -414,12 +418,13 @@ function App() {
   }, [activeRoomId, user]);
 
   // Subscribe to trending rooms from new room system (heat map)
+  // Filter by the currently selected sport tab
   useEffect(() => {
     const unsubscribe = subscribeToTrendingRooms((rooms) => {
       setTrendingRooms(rooms);
-    }, 15);
+    }, 15, activeMarketId);
     return () => unsubscribe();
-  }, []);
+  }, [activeMarketId]);
 
   // Subscribe to game rooms when modal is open
   useEffect(() => {
@@ -485,20 +490,49 @@ function App() {
 
   // Track user presence when joining/leaving rooms
   useEffect(() => {
-    if (!user?.uid) return;
+    console.log("[App] Presence useEffect triggered - activeRoomId:", activeRoomId, "user:", user?.uid);
+
+    if (!user?.uid) {
+      console.log("[App] No user, skipping presence");
+      return;
+    }
 
     // Join the new room
     if (activeRoomId) {
+      console.log("[App] Calling joinRoom for:", activeRoomId);
       joinRoom(activeRoomId, user.uid);
     }
 
     // Cleanup: leave the room when switching or unmounting
     return () => {
       if (activeRoomId) {
+        console.log("[App] Cleanup - leaving room:", activeRoomId);
         leaveRoom(activeRoomId, user.uid);
       }
     };
   }, [activeRoomId, user?.uid]);
+
+  // Presence cleanup: periodically clean stale users (no initial sync - just periodic cleanup)
+  useEffect(() => {
+    if (!user) return;
+
+    // Periodic cleanup every 60 seconds to remove stale users
+    const cleanupInterval = setInterval(() => {
+      console.log("[Presence] Running periodic cleanup");
+      cleanupStalePresence();
+    }, 60000);
+
+    // Cleanup on page unload
+    const handleUnload = () => {
+      cleanupOnUnload();
+    };
+    window.addEventListener("beforeunload", handleUnload);
+
+    return () => {
+      clearInterval(cleanupInterval);
+      window.removeEventListener("beforeunload", handleUnload);
+    };
+  }, [user]);
 
   // Load rooms from Firestore when sport tab changes
   useEffect(() => {
@@ -550,8 +584,20 @@ function App() {
   useEffect(() => {
     if (!user) return;
 
-    // No room with users - keep showing whatever we have (don't clear)
-    if (!topSweatRoom) return;
+    // No room with users - clear the display to show "Waiting for the first king..."
+    if (!topSweatRoom) {
+      // Only clear if we had something displayed
+      if (displayedTopSweat) {
+        setTopSweatPhase("fading-out");
+        const timeout = setTimeout(() => {
+          setDisplayedTopSweat(null);
+          lastTopSweatIdRef.current = null;
+          setTopSweatPhase("idle");
+        }, 1000);
+        return () => clearTimeout(timeout);
+      }
+      return;
+    }
 
     const currentTopId = topSweatRoom.id;
 
@@ -706,6 +752,18 @@ function App() {
 
   // Get games for current sport tab
   const currentGames = gamesBySport[activeMarketId] || [];
+
+  // Filtered games for Live Games panel (no finals, properly sorted)
+  const activeGames = getActiveGames(activeMarketId);
+
+  // Recently ended games (within last 2 hours)
+  const recentGames = getRecentGames(activeMarketId);
+
+  // Live games (in progress right now)
+  const liveNowGames = getLiveGamesForSport(activeMarketId);
+
+  // Upcoming games (scheduled, sorted by date/time)
+  const upcomingGames = getUpcomingGames(activeMarketId);
 
   // Get live game data for active room (for SLIP STATUS)
   const activeGameId = activeRoom?.gameId;
@@ -1104,7 +1162,6 @@ function App() {
     setCustomLine("");
     setModalPlayers([]);
     setModalPlayersError(false);
-    setManualPlayerName("");
     setGameRoomsForModal([]);
   };
 
@@ -1123,7 +1180,6 @@ function App() {
     setShowPropBuilder(true);
     setModalPlayers([]);
     setModalPlayersError(false);
-    setManualPlayerName("");
 
     // For team-based props (game lines), skip player selection
     if (category.teamBased || !category.requiresPlayer) {
@@ -1144,22 +1200,88 @@ function App() {
     setBuilderStep(2);
   };
 
-  // Handle manual player name submission
-  const handleModalManualPlayerSubmit = () => {
-    if (!manualPlayerName.trim()) return;
-    const manualPlayer = {
-      name: manualPlayerName.trim(),
-      team: "",
-      position: "",
-      isManual: true,
-    };
-    handleModalPlayerSelect(manualPlayer);
-  };
-
   // Handle team selection (for game lines)
   const handleModalTeamSelect = (team) => {
-    setSelectedPlayer({ name: team.abbrev, team: team.abbrev, isTeam: true });
+    setSelectedPlayer({ name: team.name, team: team.name, abbrev: team.abbrev, isTeam: true });
     setBuilderStep(2);
+  };
+
+  // Handle direct game line selection (one-click room creation)
+  const handleGameLineSelect = async (betType, teamOrDirection, line = null) => {
+    setIsCreatingRoom(true);
+    try {
+      // Validate game data
+      if (!gameModalData?.id) {
+        throw new Error("No game data available");
+      }
+
+      const sport = gameModalData?.sport || "nfl";
+      const awayTeam = gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY";
+      const homeTeam = gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME";
+      const gameName = `${awayTeam} vs ${homeTeam}`;
+
+      let playerName, playerId, stat, direction, lineValue;
+
+      if (betType === "spread") {
+        // teamOrDirection is the team object
+        const team = teamOrDirection;
+        if (!team || !team.name) {
+          throw new Error("Invalid team data for spread");
+        }
+        const spreadLine = line !== null ? line : (team.isHome ? -3.5 : 3.5);
+        const spreadDisplay = spreadLine > 0 ? `+${spreadLine}` : String(spreadLine);
+        playerName = team.name;
+        playerId = team.abbrev || team.name;
+        stat = "Spread";
+        lineValue = spreadDisplay;
+        direction = "COVERS";
+      } else if (betType === "moneyline") {
+        // teamOrDirection is the team object
+        const team = teamOrDirection;
+        if (!team || !team.name) {
+          throw new Error("Invalid team data for moneyline");
+        }
+        playerName = team.name;
+        playerId = team.abbrev || team.name;
+        stat = "Moneyline";
+        lineValue = "WIN";
+        direction = "YES";
+      } else if (betType === "total") {
+        // teamOrDirection is "OVER" or "UNDER"
+        playerName = gameName;
+        playerId = "TOTAL";
+        stat = "Total";
+        lineValue = String(line || 215.5);
+        direction = teamOrDirection;
+      } else {
+        throw new Error(`Unknown bet type: ${betType}`);
+      }
+
+      console.log("Creating game line room:", { gameId: gameModalData?.id, playerId, playerName, stat, lineValue, direction });
+
+      const result = await joinOrCreateRoom({
+        gameId: gameModalData?.id,
+        gameName,
+        playerId,
+        playerName,
+        stat,
+        line: lineValue,
+        direction,
+        sport,
+      });
+
+      closeGameModal();
+      setActiveRoomId(result.roomId);
+      if (isMobile) {
+        setMobileView("chat");
+      }
+    } catch (error) {
+      console.error("Error creating game line room:", error);
+      console.error("Debug data:", { betType, teamOrDirection, line, gameModalData: gameModalData?.id });
+      alert(`Failed to create room: ${error.message}`);
+    } finally {
+      setIsCreatingRoom(false);
+    }
   };
 
   // Handle stat selection
@@ -1173,10 +1295,64 @@ function App() {
     }
   };
 
-  // Handle line selection
+  // Handle line selection (legacy - for custom line input)
   const handleModalLineSelect = (line) => {
     setSelectedLine(line);
     setBuilderStep(4);
+  };
+
+  // Handle combined line + direction selection (one-click prop creation)
+  const handlePropLineSelect = async (line, direction) => {
+    setIsCreatingRoom(true);
+    setSelectedLine(line);
+
+    try {
+      // Validate required data
+      if (!selectedPlayer) {
+        throw new Error("No player selected");
+      }
+      if (!selectedStat) {
+        throw new Error("No stat selected");
+      }
+      if (!gameModalData?.id) {
+        throw new Error("No game data");
+      }
+
+      const isTeam = selectedPlayer?.isTeam;
+      const playerId = isTeam
+        ? selectedPlayer.abbrev || selectedPlayer.name
+        : selectedPlayer?.id || selectedPlayer?.name;
+      const playerName = isTeam
+        ? selectedPlayer.name
+        : selectedPlayer
+        ? `${selectedPlayer.name}${selectedPlayer.team ? ` (${selectedPlayer.team})` : ""}`
+        : gameModalData?.home?.name || "TEAM";
+
+      console.log("Creating prop room:", { gameId: gameModalData?.id, playerId, playerName, stat: selectedStat, line, direction });
+
+      const result = await joinOrCreateRoom({
+        gameId: gameModalData?.id,
+        gameName: `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`,
+        playerId,
+        playerName,
+        stat: selectedStat,
+        line: line,
+        direction,
+        sport: gameModalData?.sport || "nfl",
+      });
+
+      closeGameModal();
+      setActiveRoomId(result.roomId);
+      if (isMobile) {
+        setMobileView("chat");
+      }
+    } catch (error) {
+      console.error("Error creating prop room:", error);
+      console.error("Debug data:", { selectedPlayer, selectedStat, gameModalData: gameModalData?.id, line, direction });
+      alert(`Failed to create room: ${error.message}`);
+    } finally {
+      setIsCreatingRoom(false);
+    }
   };
 
   // Handle direction selection and create/join room
@@ -1184,16 +1360,23 @@ function App() {
     setIsCreatingRoom(true);
 
     try {
-      const playerName = selectedPlayer?.isTeam
-        ? selectedPlayer.name
+      // For teams, use team abbreviation for ID but full name for display
+      // For players, use ESPN player ID for uniqueness, display name for UI
+      const isTeam = selectedPlayer?.isTeam;
+      const playerId = isTeam
+        ? selectedPlayer.abbrev || selectedPlayer.name // Team abbrev as ID
+        : selectedPlayer?.id || selectedPlayer?.name; // ESPN player ID
+      const playerName = isTeam
+        ? selectedPlayer.name // Full team name
         : selectedPlayer
         ? `${selectedPlayer.name}${selectedPlayer.team ? ` (${selectedPlayer.team})` : ""}`
-        : gameModalData?.home?.abbrev || "TEAM";
+        : gameModalData?.home?.name || "TEAM";
 
       const result = await joinOrCreateRoom({
         gameId: gameModalData?.id,
-        gameName: `${gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.abbrev || "HOME"}`,
-        player: playerName,
+        gameName: `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`,
+        playerId, // Use player ID for room ID uniqueness
+        playerName, // Use display name for room title
         stat: selectedStat,
         line: selectedLine,
         direction,
@@ -1225,7 +1408,7 @@ function App() {
     setCustomLine("");
     setModalPlayers([]);
     setModalPlayersError(false);
-    setManualPlayerName("");
+    setPlayerSearchQuery("");
   };
 
   // Go back a step in prop builder
@@ -1479,7 +1662,7 @@ function App() {
         </div>
         {trendingRooms.length === 0 ? (
           <div className="empty-rooms">
-            <p>No active rooms yet</p>
+            <p>No trending {activeMarketId.toUpperCase()} rooms</p>
             <p className="empty-rooms-sub">
               Click a game below to build your first prop!
             </p>
@@ -1730,7 +1913,7 @@ function App() {
       {/* LIVE GAMES PANEL */}
       <aside className={`live-games-panel ${isMobile && mobileView !== "games" ? "mobile-hidden" : ""}`}>
         <div className="live-games-header">
-          <h2>Live Games</h2>
+          <h2>Games</h2>
           <button type="button" className="refresh-btn" onClick={refreshGames}>
             Refresh
           </button>
@@ -1779,78 +1962,197 @@ function App() {
           </div>
         )}
 
-        {/* Other Games */}
-        <div className="other-games-label">
-          {activeMarket.label} Games Today
+        {/* LIVE NOW Section */}
+        {liveNowGames.filter((g) => g.id !== activeGameId).length > 0 && (
+          <>
+            <div className="section-label live-section-label">
+              LIVE NOW
+            </div>
+            <div className="games-list">
+              {liveNowGames
+                .filter((g) => g.id !== activeGameId)
+                .map((game) => {
+                  const gameData = {
+                    id: game.id,
+                    away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                    home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                    awayScore: game.awayTeam?.score,
+                    homeScore: game.homeTeam?.score,
+                    status: "live",
+                    time: `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`,
+                    sport: activeMarketId,
+                  };
+                  return (
+                    <div
+                      key={game.id}
+                      className="game-card game-card-clickable live-game-card"
+                      onClick={() => openGameModal(gameData)}
+                    >
+                      <div className="game-card-row">
+                        <div className="game-card-team">
+                          {game.awayTeam?.logo && (
+                            <img
+                              src={game.awayTeam.logo}
+                              alt={game.awayTeam.name}
+                              className="game-card-logo"
+                            />
+                          )}
+                          <span className="game-card-abbr">{game.awayTeam?.name}</span>
+                        </div>
+                        <span className="game-card-score">{game.awayTeam?.score}</span>
+                        <span className="game-card-status is-live">
+                          {getPeriodLabel(activeMarketId, game.status.period)} {game.status.clock || ""}
+                        </span>
+                      </div>
+                      <div className="game-card-row">
+                        <div className="game-card-team">
+                          {game.homeTeam?.logo && (
+                            <img
+                              src={game.homeTeam.logo}
+                              alt={game.homeTeam.name}
+                              className="game-card-logo"
+                            />
+                          )}
+                          <span className="game-card-abbr">{game.homeTeam?.name}</span>
+                        </div>
+                        <span className="game-card-score">{game.homeTeam?.score}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </>
+        )}
+
+        {/* UPCOMING Section */}
+        <div className="section-label upcoming-section-label">
+          UPCOMING
         </div>
-        <div className="games-list">
-          {currentGames.length === 0 ? (
-            <div className="no-games">No games scheduled</div>
+        <div className="games-list upcoming-games-list">
+          {upcomingGames.filter((g) => g.id !== activeGameId).length === 0 ? (
+            <div className="no-games">No upcoming games scheduled</div>
           ) : (
-            currentGames
+            upcomingGames
               .filter((g) => g.id !== activeGameId)
               .map((game) => {
+                const gameDate = new Date(game.date);
+                const isToday = gameDate.toDateString() === new Date().toDateString();
+                const isTomorrow = gameDate.toDateString() === new Date(Date.now() + 86400000).toDateString();
+                const dateLabel = isToday
+                  ? "TODAY"
+                  : isTomorrow
+                  ? "TOMORROW"
+                  : gameDate.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }).toUpperCase();
+                const timeLabel = gameDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
                 const gameData = {
                   id: game.id,
-                  away: { abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.displayName, logo: game.awayTeam?.logo },
-                  home: { abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.displayName, logo: game.homeTeam?.logo },
-                  awayScore: game.awayTeam?.score,
-                  homeScore: game.homeTeam?.score,
-                  status: game.isLive ? "live" : game.isFinal ? "final" : "scheduled",
-                  time: game.isLive
-                    ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
-                    : game.isFinal
-                    ? "Final"
-                    : new Date(game.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+                  away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                  home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                  awayScore: 0,
+                  homeScore: 0,
+                  status: "scheduled",
+                  time: timeLabel,
                   sport: activeMarketId,
                 };
                 return (
                   <div
                     key={game.id}
-                    className="game-card game-card-clickable"
+                    className="game-card game-card-clickable upcoming-game-card"
                     onClick={() => openGameModal(gameData)}
                   >
-                    <div className="game-card-row">
-                      <div className="game-card-team">
+                    <div className="upcoming-game-header">
+                      <span className="upcoming-date">{dateLabel}</span>
+                      <span className="upcoming-time">{timeLabel}</span>
+                    </div>
+                    <div className="upcoming-matchup">
+                      <div className="upcoming-team">
                         {game.awayTeam?.logo && (
                           <img
                             src={game.awayTeam.logo}
-                            alt={game.awayTeam.abbreviation}
+                            alt={game.awayTeam.name}
                             className="game-card-logo"
                           />
                         )}
-                        <span className="game-card-abbr">{game.awayTeam?.abbreviation}</span>
+                        <span>{game.awayTeam?.name}</span>
                       </div>
-                      <span className="game-card-score">{game.awayTeam?.score}</span>
-                      <span className={"game-card-status" + (game.isLive ? " is-live" : "")}>
-                        {game.isLive
-                          ? `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`
-                          : game.isFinal
-                          ? "Final"
-                          : new Date(game.date).toLocaleTimeString([], {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })}
-                      </span>
-                    </div>
-                    <div className="game-card-row">
-                      <div className="game-card-team">
+                      <span className="upcoming-at">@</span>
+                      <div className="upcoming-team">
                         {game.homeTeam?.logo && (
                           <img
                             src={game.homeTeam.logo}
-                            alt={game.homeTeam.abbreviation}
+                            alt={game.homeTeam.name}
                             className="game-card-logo"
                           />
                         )}
-                        <span className="game-card-abbr">{game.homeTeam?.abbreviation}</span>
+                        <span>{game.homeTeam?.name}</span>
                       </div>
-                      <span className="game-card-score">{game.homeTeam?.score}</span>
                     </div>
                   </div>
                 );
               })
           )}
         </div>
+
+        {/* Recently Ended Games */}
+        {recentGames.length > 0 && (
+          <>
+            <div className="section-label recent-games-label">
+              RECENTLY ENDED
+            </div>
+            <div className="games-list recent-games-list">
+              {recentGames
+                .filter((g) => g.id !== activeGameId)
+                .map((game) => {
+                  const gameData = {
+                    id: game.id,
+                    away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                    home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                    awayScore: game.awayTeam?.score,
+                    homeScore: game.homeTeam?.score,
+                    status: "final",
+                    time: "Final",
+                    sport: activeMarketId,
+                  };
+                  return (
+                    <div
+                      key={game.id}
+                      className="game-card game-card-clickable recent-game-card"
+                      onClick={() => openGameModal(gameData)}
+                    >
+                      <div className="game-card-row">
+                        <div className="game-card-team">
+                          {game.awayTeam?.logo && (
+                            <img
+                              src={game.awayTeam.logo}
+                              alt={game.awayTeam.name}
+                              className="game-card-logo"
+                            />
+                          )}
+                          <span className="game-card-abbr">{game.awayTeam?.name}</span>
+                        </div>
+                        <span className="game-card-score">{game.awayTeam?.score}</span>
+                        <span className="game-card-status">Final</span>
+                      </div>
+                      <div className="game-card-row">
+                        <div className="game-card-team">
+                          {game.homeTeam?.logo && (
+                            <img
+                              src={game.homeTeam.logo}
+                              alt={game.homeTeam.name}
+                              className="game-card-logo"
+                            />
+                          )}
+                          <span className="game-card-abbr">{game.homeTeam?.name}</span>
+                        </div>
+                        <span className="game-card-score">{game.homeTeam?.score}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </>
+        )}
       </aside>
 
       {/* MOBILE BOTTOM NAVIGATION */}
@@ -2717,7 +3019,7 @@ function App() {
                   </div>
 
                   <div className="prop-builder-content">
-                    {/* Step 1: Pick Player */}
+                    {/* Step 1: Pick Player - STRUCTURED SELECTION ONLY */}
                     {builderStep === 1 && selectedCategory?.requiresPlayer && (
                       <div className="builder-step">
                         <h3>Pick a Player</h3>
@@ -2731,89 +3033,246 @@ function App() {
 
                         {!modalPlayersLoading && modalPlayersError && (
                           <div className="players-error">
-                            <p>Couldn't load players - type player name manually</p>
-                            <div className="manual-player-input">
-                              <input
-                                type="text"
-                                placeholder="Enter player name..."
-                                value={manualPlayerName}
-                                onChange={(e) => setManualPlayerName(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
-                              />
-                              <button
-                                onClick={handleModalManualPlayerSubmit}
-                                disabled={!manualPlayerName.trim()}
-                              >
-                                Use
-                              </button>
-                            </div>
+                            <p>Could not load player roster</p>
+                            <p className="players-error-hint">Please try again or select a different game</p>
+                            <button
+                              className="retry-btn"
+                              onClick={() => {
+                                setModalPlayersError(false);
+                                setModalPlayersLoading(true);
+                                // Re-trigger the useEffect by toggling category
+                                const cat = selectedCategory;
+                                setSelectedCategory(null);
+                                setTimeout(() => setSelectedCategory(cat), 100);
+                              }}
+                            >
+                              Retry
+                            </button>
                           </div>
                         )}
 
                         {!modalPlayersLoading && !modalPlayersError && modalPlayers.length > 0 && (
-                          <div className="player-grid">
-                            {modalPlayers.slice(0, 16).map((player, idx) => (
-                              <button
-                                key={player.id || `${player.name}-${idx}`}
-                                className="player-btn"
-                                onClick={() => handleModalPlayerSelect(player)}
-                              >
-                                <span className="player-name">{player.name}</span>
-                                <span className="player-team">
-                                  {player.position && `${player.position} · `}{player.team}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
+                          <>
+                            {/* Search filter for players */}
+                            <div className="player-search">
+                              <input
+                                type="text"
+                                placeholder="Search players..."
+                                value={playerSearchQuery}
+                                onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                                autoFocus
+                              />
+                              {playerSearchQuery && (
+                                <button
+                                  className="player-search-clear"
+                                  onClick={() => setPlayerSearchQuery("")}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Filtered player grid */}
+                            <div className="player-grid">
+                              {modalPlayers
+                                .filter((player) =>
+                                  !playerSearchQuery ||
+                                  player.name.toLowerCase().includes(playerSearchQuery.toLowerCase()) ||
+                                  (player.team && player.team.toLowerCase().includes(playerSearchQuery.toLowerCase()))
+                                )
+                                .slice(0, 20)
+                                .map((player, idx) => (
+                                  <button
+                                    key={player.id || `${player.name}-${idx}`}
+                                    className="player-btn"
+                                    onClick={() => {
+                                      handleModalPlayerSelect(player);
+                                      setPlayerSearchQuery("");
+                                    }}
+                                  >
+                                    <span className="player-name">{player.name}</span>
+                                    <span className="player-team">
+                                      {player.position && `${player.position} · `}{player.team}
+                                    </span>
+                                  </button>
+                                ))}
+                            </div>
+
+                            {/* No results message */}
+                            {playerSearchQuery && modalPlayers.filter((p) =>
+                              p.name.toLowerCase().includes(playerSearchQuery.toLowerCase()) ||
+                              (p.team && p.team.toLowerCase().includes(playerSearchQuery.toLowerCase()))
+                            ).length === 0 && (
+                              <div className="players-no-results">
+                                <p>No players match "{playerSearchQuery}"</p>
+                                <button onClick={() => setPlayerSearchQuery("")}>
+                                  Clear search
+                                </button>
+                              </div>
+                            )}
+                          </>
                         )}
 
                         {!modalPlayersLoading && !modalPlayersError && modalPlayers.length === 0 && (
                           <div className="players-error">
-                            <p>No players found - type player name manually</p>
-                            <div className="manual-player-input">
-                              <input
-                                type="text"
-                                placeholder="Enter player name..."
-                                value={manualPlayerName}
-                                onChange={(e) => setManualPlayerName(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
-                              />
-                              <button
-                                onClick={handleModalManualPlayerSubmit}
-                                disabled={!manualPlayerName.trim()}
-                              >
-                                Use
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Always show manual input option */}
-                        {!modalPlayersLoading && modalPlayers.length > 0 && (
-                          <div className="manual-player-option">
-                            <p>Don't see your player?</p>
-                            <div className="manual-player-input">
-                              <input
-                                type="text"
-                                placeholder="Type name..."
-                                value={manualPlayerName}
-                                onChange={(e) => setManualPlayerName(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleModalManualPlayerSubmit()}
-                              />
-                              <button
-                                onClick={handleModalManualPlayerSubmit}
-                                disabled={!manualPlayerName.trim()}
-                              >
-                                Use
-                              </button>
-                            </div>
+                            <p>No players found for this category</p>
+                            <p className="players-error-hint">Try a different prop category</p>
                           </div>
                         )}
                       </div>
                     )}
 
-                    {/* Step 1 for Team-based props (Game Lines) */}
-                    {builderStep === 2 && selectedCategory?.teamBased && !selectedPlayer && (
+                    {/* Game Lines View - All options at once */}
+                    {selectedCategory?.id === "gameLines" && (
+                      <div className="builder-step game-lines-step">
+                        {(() => {
+                          const teams = getTeamsForGame(gameModalData);
+                          const awayTeam = teams.find(t => t.isAway) || teams[0];
+                          const homeTeam = teams.find(t => t.isHome) || teams[1];
+                          const sport = gameModalData?.sport || "nfl";
+
+                          if (!awayTeam || !homeTeam) {
+                            return (
+                              <div className="game-lines-error">
+                                <p>Unable to load teams for this game.</p>
+                              </div>
+                            );
+                          }
+
+                          // Generate spread values from -30.5 to +30.5
+                          const spreadValues = [];
+                          for (let i = -30.5; i <= 30.5; i += 0.5) {
+                            spreadValues.push(i);
+                          }
+
+                          // Generate total values based on sport
+                          const totalRange = sport === "nba"
+                            ? { min: 180.5, max: 280.5 }
+                            : sport === "nfl"
+                              ? { min: 25.5, max: 70.5 }
+                              : sport === "nhl"
+                                ? { min: 3.5, max: 10.5 }
+                                : { min: 0.5, max: 10.5 };
+
+                          const totalValues = [];
+                          for (let i = totalRange.min; i <= totalRange.max; i += 0.5) {
+                            totalValues.push(i);
+                          }
+
+                          // Default starting values
+                          const defaultSpread = sport === "nba" ? 5.5 : sport === "nfl" ? 3.5 : 1.5;
+                          const defaultTotal = sport === "nba" ? 220.5 : sport === "nfl" ? 45.5 : sport === "nhl" ? 5.5 : 2.5;
+
+                          return (
+                            <>
+                              {/* SPREAD */}
+                              <div className="game-line-section">
+                                <h4>SPREAD</h4>
+                                <div className="spread-columns">
+                                  <div className="spread-column">
+                                    <div className="spread-team-header">{awayTeam?.name}</div>
+                                    <div className="spread-scroll">
+                                      {spreadValues.map(val => (
+                                        <button
+                                          key={`away-${val}`}
+                                          className={`spread-btn ${val === defaultSpread ? 'default' : ''}`}
+                                          onClick={() => handleGameLineSelect("spread", awayTeam, val)}
+                                          disabled={isCreatingRoom}
+                                        >
+                                          {val > 0 ? `+${val}` : val}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="spread-column">
+                                    <div className="spread-team-header">{homeTeam?.name}</div>
+                                    <div className="spread-scroll">
+                                      {spreadValues.map(val => (
+                                        <button
+                                          key={`home-${val}`}
+                                          className={`spread-btn ${val === -defaultSpread ? 'default' : ''}`}
+                                          onClick={() => handleGameLineSelect("spread", homeTeam, val)}
+                                          disabled={isCreatingRoom}
+                                        >
+                                          {val > 0 ? `+${val}` : val}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* MONEYLINE */}
+                              <div className="game-line-section">
+                                <h4>MONEYLINE</h4>
+                                <div className="game-line-options">
+                                  <button
+                                    className="game-line-btn"
+                                    onClick={() => handleGameLineSelect("moneyline", awayTeam)}
+                                    disabled={isCreatingRoom}
+                                  >
+                                    <span className="gl-team">{awayTeam?.name}</span>
+                                    <span className="gl-line">ML</span>
+                                  </button>
+                                  <button
+                                    className="game-line-btn"
+                                    onClick={() => handleGameLineSelect("moneyline", homeTeam)}
+                                    disabled={isCreatingRoom}
+                                  >
+                                    <span className="gl-team">{homeTeam?.name}</span>
+                                    <span className="gl-line">ML</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* TOTAL */}
+                              <div className="game-line-section">
+                                <h4>TOTAL POINTS</h4>
+                                <div className="total-columns">
+                                  <div className="total-column">
+                                    <div className="total-header over">⬆️ OVER</div>
+                                    <div className="total-scroll">
+                                      {totalValues.map(val => (
+                                        <button
+                                          key={`over-${val}`}
+                                          className={`total-btn over ${val === defaultTotal ? 'default' : ''}`}
+                                          onClick={() => handleGameLineSelect("total", "OVER", val)}
+                                          disabled={isCreatingRoom}
+                                        >
+                                          {val}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="total-column">
+                                    <div className="total-header under">⬇️ UNDER</div>
+                                    <div className="total-scroll">
+                                      {totalValues.map(val => (
+                                        <button
+                                          key={`under-${val}`}
+                                          className={`total-btn under ${val === defaultTotal ? 'default' : ''}`}
+                                          onClick={() => handleGameLineSelect("total", "UNDER", val)}
+                                          disabled={isCreatingRoom}
+                                        >
+                                          {val}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {isCreatingRoom && (
+                                <div className="creating-room-status">Creating room...</div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {/* Step 1 for other Team-based props (non-game-lines) */}
+                    {builderStep === 2 && selectedCategory?.teamBased && selectedCategory?.id !== "gameLines" && !selectedPlayer && (
                       <div className="builder-step">
                         <h3>Pick a Team</h3>
                         <div className="team-grid">
@@ -2831,8 +3290,8 @@ function App() {
                       </div>
                     )}
 
-                    {/* Step 2: Pick Stat */}
-                    {builderStep === 2 && (selectedPlayer || !selectedCategory?.requiresPlayer) && (
+                    {/* Step 2: Pick Stat (not for gameLines - they have dedicated view) */}
+                    {builderStep === 2 && selectedCategory?.id !== "gameLines" && (selectedPlayer || !selectedCategory?.requiresPlayer) && (
                       <div className="builder-step">
                         <h3>Pick a Stat</h3>
                         {selectedPlayer && (
@@ -2855,40 +3314,98 @@ function App() {
                       </div>
                     )}
 
-                    {/* Step 3: Pick Line */}
+                    {/* Step 3: Pick Line with Over/Under */}
                     {builderStep === 3 && (
-                      <div className="builder-step">
-                        <h3>Pick a Line</h3>
-                        <div className="selected-info">
+                      <div className="builder-step prop-lines-step">
+                        <div className="selected-info prop-header">
                           {selectedPlayer?.name} - {selectedStat}
                         </div>
-                        <div className="line-grid">
-                          {(COMMON_LINES[selectedStat] || []).map((line) => (
-                            <button
-                              key={line}
-                              className={`line-btn ${selectedLine === line ? "selected" : ""}`}
-                              onClick={() => handleModalLineSelect(line)}
-                            >
-                              {line}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="custom-line">
-                          <input
-                            type="number"
-                            step="0.5"
-                            placeholder="Custom line..."
-                            value={customLine}
-                            onChange={(e) => setCustomLine(e.target.value)}
-                          />
-                          <button
-                            className="custom-line-btn"
-                            disabled={!customLine}
-                            onClick={() => handleModalLineSelect(customLine)}
-                          >
-                            Use
-                          </button>
-                        </div>
+                        {(() => {
+                          // Generate line ranges based on stat type
+                          const getLineRange = (stat) => {
+                            const ranges = {
+                              // NFL
+                              "Passing Yards": { min: 149.5, max: 349.5, step: 5 },
+                              "Passing TDs": { min: 0.5, max: 5.5, step: 0.5 },
+                              "Interceptions": { min: 0.5, max: 3.5, step: 0.5 },
+                              "Rushing Yards": { min: 9.5, max: 149.5, step: 5 },
+                              "Rushing TDs": { min: 0.5, max: 3.5, step: 0.5 },
+                              "Receiving Yards": { min: 9.5, max: 149.5, step: 5 },
+                              "Receptions": { min: 0.5, max: 12.5, step: 0.5 },
+                              "Receiving TDs": { min: 0.5, max: 3.5, step: 0.5 },
+                              // NBA
+                              "Points": { min: 4.5, max: 54.5, step: 1 },
+                              "Rebounds": { min: 0.5, max: 20.5, step: 0.5 },
+                              "Assists": { min: 0.5, max: 16.5, step: 0.5 },
+                              "Pts+Reb+Ast": { min: 9.5, max: 69.5, step: 1 },
+                              "Pts+Reb": { min: 9.5, max: 54.5, step: 1 },
+                              "Pts+Ast": { min: 9.5, max: 54.5, step: 1 },
+                              "Steals": { min: 0.5, max: 5.5, step: 0.5 },
+                              "Blocks": { min: 0.5, max: 5.5, step: 0.5 },
+                              "3-Pointers": { min: 0.5, max: 8.5, step: 0.5 },
+                              // MLB
+                              "Strikeouts": { min: 2.5, max: 12.5, step: 0.5 },
+                              "Earned Runs": { min: 0.5, max: 6.5, step: 0.5 },
+                              "Hits Allowed": { min: 2.5, max: 10.5, step: 0.5 },
+                              "Hits": { min: 0.5, max: 4.5, step: 0.5 },
+                              "Home Runs": { min: 0.5, max: 3.5, step: 0.5 },
+                              "RBIs": { min: 0.5, max: 4.5, step: 0.5 },
+                              "Total Bases": { min: 0.5, max: 5.5, step: 0.5 },
+                              // NHL
+                              "Goals": { min: 0.5, max: 4.5, step: 0.5 },
+                              "Shots on Target": { min: 0.5, max: 8.5, step: 0.5 },
+                            };
+                            return ranges[stat] || { min: 0.5, max: 20.5, step: 0.5 };
+                          };
+
+                          const range = getLineRange(selectedStat);
+                          const lines = [];
+                          for (let i = range.min; i <= range.max; i += range.step) {
+                            lines.push(parseFloat(i.toFixed(1)));
+                          }
+
+                          // Find default/common line for highlighting
+                          const commonLines = COMMON_LINES[selectedStat] || [];
+                          const defaultLine = commonLines[Math.floor(commonLines.length / 2)] || lines[Math.floor(lines.length / 2)];
+
+                          return (
+                            <div className="prop-over-under-columns">
+                              <div className="prop-column over-column">
+                                <div className="prop-column-header over">⬆️ OVER</div>
+                                <div className="prop-lines-scroll">
+                                  {lines.map(line => (
+                                    <button
+                                      key={`over-${line}`}
+                                      className={`prop-line-btn over ${line === defaultLine ? 'default' : ''}`}
+                                      onClick={() => handlePropLineSelect(line, "OVER")}
+                                      disabled={isCreatingRoom}
+                                    >
+                                      {line}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="prop-column under-column">
+                                <div className="prop-column-header under">⬇️ UNDER</div>
+                                <div className="prop-lines-scroll">
+                                  {lines.map(line => (
+                                    <button
+                                      key={`under-${line}`}
+                                      className={`prop-line-btn under ${line === defaultLine ? 'default' : ''}`}
+                                      onClick={() => handlePropLineSelect(line, "UNDER")}
+                                      disabled={isCreatingRoom}
+                                    >
+                                      {line}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        {isCreatingRoom && (
+                          <div className="creating-room-status">Creating room...</div>
+                        )}
                       </div>
                     )}
 

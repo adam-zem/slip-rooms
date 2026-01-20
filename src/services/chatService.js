@@ -16,6 +16,11 @@ import {
   increment,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import {
+  joinRoomWithPresence,
+  leaveRoomWithPresence,
+  cleanupOnUnload,
+} from "./presenceService";
 
 /**
  * Create or update a room in Firestore
@@ -40,61 +45,29 @@ export async function createRoom(roomData) {
 }
 
 /**
- * Join a room - increment user count and add to active users
+ * Join a room - uses presence service for accurate tracking
+ * Includes heartbeat and automatic disconnect cleanup
  */
 export async function joinRoom(roomId, userId) {
-  if (!roomId || !userId) return;
-
-  const roomRef = doc(db, "rooms", roomId);
-
-  try {
-    const roomSnap = await getDoc(roomRef);
-    if (!roomSnap.exists()) return;
-
-    const roomData = roomSnap.data();
-    const activeUsers = roomData.activeUsers || [];
-
-    // Don't add if already in the room
-    if (activeUsers.includes(userId)) return;
-
-    await updateDoc(roomRef, {
-      userCount: increment(1),
-      activeUsers: [...activeUsers, userId],
-    });
-  } catch (error) {
-    console.error("Error joining room:", error);
+  console.log("[chatService] joinRoom called - roomId:", roomId, "userId:", userId);
+  if (!roomId || !userId) {
+    console.warn("[chatService] joinRoom - missing params, skipping");
+    return;
   }
+  await joinRoomWithPresence(roomId, userId);
+  console.log("[chatService] joinRoom completed");
 }
 
 /**
- * Leave a room - decrement user count and remove from active users
+ * Leave a room - uses presence service for accurate tracking
  */
 export async function leaveRoom(roomId, userId) {
   if (!roomId || !userId) return;
-
-  const roomRef = doc(db, "rooms", roomId);
-
-  try {
-    const roomSnap = await getDoc(roomRef);
-    if (!roomSnap.exists()) return;
-
-    const roomData = roomSnap.data();
-    const activeUsers = roomData.activeUsers || [];
-
-    // Only decrement if user was in the room
-    if (!activeUsers.includes(userId)) return;
-
-    const newActiveUsers = activeUsers.filter((id) => id !== userId);
-    const newCount = Math.max(0, (roomData.userCount || 1) - 1);
-
-    await updateDoc(roomRef, {
-      userCount: newCount,
-      activeUsers: newActiveUsers,
-    });
-  } catch (error) {
-    console.error("Error leaving room:", error);
-  }
+  await leaveRoomWithPresence(roomId, userId);
 }
+
+// Re-export cleanup function for page unload handling
+export { cleanupOnUnload };
 
 /**
  * Get a room by ID
@@ -220,8 +193,19 @@ export function subscribeToAllRooms(callback) {
     (snapshot) => {
       const rooms = [];
       snapshot.forEach((doc) => {
-        rooms.push({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        rooms.push({ id: doc.id, ...data });
       });
+      // Log rooms with users for debugging
+      const roomsWithUsers = rooms.filter(r => (r.userCount || 0) > 0);
+      if (roomsWithUsers.length > 0) {
+        console.log("[Rooms] Rooms with users:", roomsWithUsers.map(r => ({
+          id: r.id,
+          name: r.name,
+          userCount: r.userCount,
+          activeUsers: r.activeUsers,
+        })));
+      }
       callback(rooms);
     },
     (error) => {

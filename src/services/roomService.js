@@ -19,17 +19,20 @@ import { db } from "../firebase";
 
 /**
  * Generate a unique room ID from prop selections
- * Format: gameId_player_stat_line_direction
- * e.g., "bills-broncos_allen_passyds_275.5_over"
+ * Uses player ID (from ESPN) to guarantee uniqueness - no duplicates possible
+ * Format: gameId_playerId_stat_line_direction
+ * e.g., "401547417_12345_passingyards_275_5_over"
  */
-export function generateRoomId(gameId, player, stat, line, direction) {
+export function generateRoomId(gameId, playerId, stat, line, direction) {
   const sanitize = (str) =>
     str
       .toLowerCase()
       .replace(/[^a-z0-9]/g, "")
-      .substring(0, 20);
+      .substring(0, 30);
 
-  const playerKey = sanitize(player);
+  // Use player ID directly - this is the key to preventing duplicates
+  // Player IDs from ESPN are unique and consistent
+  const playerKey = String(playerId).replace(/[^a-z0-9]/gi, "").toLowerCase();
   const statKey = sanitize(stat);
   const lineKey = String(line).replace(".", "_");
   const dirKey = direction.toLowerCase();
@@ -68,18 +71,31 @@ export function generateRoomName(player, stat, line, direction) {
 /**
  * Join or create a room - the magic function
  * Returns the room data and whether it was newly created
+ *
+ * @param {Object} params
+ * @param {string} params.gameId - ESPN game ID
+ * @param {string} params.gameName - Display name for the game (e.g., "BUF vs BAL")
+ * @param {string} params.playerId - ESPN player ID (ensures uniqueness)
+ * @param {string} params.playerName - Display name for the player
+ * @param {string} params.stat - The stat type (e.g., "Passing Yards")
+ * @param {string|number} params.line - The line number (e.g., 275.5)
+ * @param {string} params.direction - "over" or "under"
+ * @param {string} params.sport - Sport ID (nfl, nba, etc.)
  */
 export async function joinOrCreateRoom({
   gameId,
   gameName,
-  player,
+  playerId,
+  playerName,
   stat,
   line,
   direction,
   sport,
 }) {
-  const roomId = generateRoomId(gameId, player, stat, line, direction);
-  const roomName = generateRoomName(player, stat, line, direction);
+  // Use playerId for room ID generation (guarantees uniqueness)
+  const roomId = generateRoomId(gameId, playerId, stat, line, direction);
+  // Use playerName for display
+  const roomName = generateRoomName(playerName, stat, line, direction);
   const roomRef = doc(db, "rooms", roomId);
 
   try {
@@ -103,7 +119,8 @@ export async function joinOrCreateRoom({
         name: roomName,
         gameId,
         gameName,
-        player,
+        playerId, // Store player ID for reference
+        playerName, // Store display name
         stat,
         line,
         direction,
@@ -177,8 +194,11 @@ export function subscribeToActiveRooms(callback, sport = null) {
 /**
  * Subscribe to trending rooms across all games
  * Shows rooms with most users
+ * @param {Function} callback - Called with array of trending rooms
+ * @param {number} limit - Max number of rooms to return
+ * @param {string} sport - Optional sport filter (e.g., "nfl", "nba")
  */
-export function subscribeToTrendingRooms(callback, limit = 10) {
+export function subscribeToTrendingRooms(callback, limit = 10, sport = null) {
   const thirtyMinAgo = Timestamp.fromDate(
     new Date(Date.now() - 30 * 60 * 1000)
   );
@@ -190,13 +210,36 @@ export function subscribeToTrendingRooms(callback, limit = 10) {
   );
 
   return onSnapshot(q, (snapshot) => {
-    const rooms = snapshot.docs
+    let rooms = snapshot.docs
       .map((doc) => ({
         id: doc.id,
         ...doc.data(),
-      }))
+      }));
+
+    // Filter by sport if specified
+    if (sport) {
+      const sportLower = sport.toLowerCase();
+      rooms = rooms.filter(r => (r.sport || "").toLowerCase() === sportLower);
+    }
+
+    // Sort by user count and limit
+    rooms = rooms
       .sort((a, b) => (b.userCount || 0) - (a.userCount || 0))
       .slice(0, limit);
+
+    // Log trending rooms data for debugging
+    const roomsWithUsers = rooms.filter(r => (r.userCount || 0) > 0);
+    if (roomsWithUsers.length > 0) {
+      console.log("[TrendingRooms] Rooms with users:", roomsWithUsers.map(r => ({
+        id: r.id,
+        name: r.name,
+        sport: r.sport,
+        userCount: r.userCount,
+      })));
+    } else {
+      console.log("[TrendingRooms] No rooms with users for sport:", sport || "all", "total rooms:", rooms.length);
+    }
+
     callback(rooms);
   });
 }
