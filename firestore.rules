@@ -1,31 +1,89 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Usernames collection - for username reservation during signup
+    match /usernames/{username} {
+      // Anyone can read (to check username availability during signup)
+      allow read: if true;
+      // Only authenticated users can create (reserve their username)
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      // No updates allowed - usernames are permanent
+      allow update: if false;
+      // Only the owner or admin can delete
+      allow delete: if request.auth != null
+        && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
     // Users collection
     match /users/{userId} {
       // Any authenticated user can read profiles (for viewing other users)
       allow read: if request.auth != null;
-      // Users can only write their own profile
-      allow write: if request.auth != null && request.auth.uid == userId;
+      // Users can create their own profile (during signup)
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Users can update their own profile
+      allow update: if request.auth != null && request.auth.uid == userId;
+      // Admins can update any profile (for banning, etc.)
+      allow update: if isAdmin();
+      // Only admins can delete user profiles
+      allow delete: if isAdmin();
     }
 
-    // Rooms collection - any authenticated user can read/update rooms, only admins can create/delete
+    // Rooms collection
     match /rooms/{roomId} {
+      // Any authenticated user can read rooms
       allow read: if request.auth != null;
       // Only admins can create rooms
-      allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
-      allow update: if request.auth != null; // For userCount/presence tracking
+      allow create: if isAdmin();
+      // Any authenticated user can update (for userCount/presence tracking)
+      allow update: if request.auth != null;
       // Only admins can delete rooms
-      allow delete: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow delete: if isAdmin();
 
-      // Messages subcollection - any authenticated user can read/write messages
+      // Messages subcollection
       match /messages/{messageId} {
         allow read: if request.auth != null;
+        // Allow creating messages with required fields
         allow create: if request.auth != null
-          && request.resource.data.username is string
-          && request.resource.data.text is string;
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.username is string;
+        // Admins can update/delete messages (moderation)
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // Conversations collection (DMs)
+    match /conversations/{conversationId} {
+      // Users can read conversations they're part of
+      allow read: if request.auth != null
+        && (resource.data.participants[request.auth.uid] == true
+            || request.auth.uid in resource.data.participantIds);
+      // Users can create conversations
+      allow create: if request.auth != null;
+      // Users can update conversations they're part of (mark as read, etc.)
+      allow update: if request.auth != null
+        && (resource.data.participants[request.auth.uid] == true
+            || request.auth.uid in resource.data.participantIds);
+      // Admins can delete conversations
+      allow delete: if isAdmin();
+
+      // DM Messages subcollection
+      match /messages/{messageId} {
+        // Read if user is in the parent conversation
+        allow read: if request.auth != null;
+        // Create if user is authenticated
+        allow create: if request.auth != null
+          && request.resource.data.senderId == request.auth.uid;
+        // Admins can update/delete
+        allow update, delete: if isAdmin();
       }
     }
 
@@ -37,33 +95,38 @@ service cloud.firestore {
       allow create: if request.auth != null
         && request.resource.data.from == request.auth.uid;
       // Both sender and recipient can delete/update (accept/decline)
-      allow update, delete: if request.auth != null;
+      allow update, delete: if request.auth != null
+        && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
     }
 
     // Friendships collection
     match /friendships/{friendshipId} {
       allow read: if request.auth != null;
-      // Only allow creating friendships where user is one of the parties
-      allow create: if request.auth != null;
-      // Only allow deleting if user is one of the parties
-      allow delete: if request.auth != null;
+      // Allow creating friendships where user is one of the parties
+      allow create: if request.auth != null
+        && (request.resource.data.userId == request.auth.uid
+            || request.resource.data.friendId == request.auth.uid);
+      // Allow deleting if user is one of the parties
+      allow delete: if request.auth != null
+        && (resource.data.userId == request.auth.uid
+            || resource.data.friendId == request.auth.uid);
     }
 
     // Greatest Hits collection
     match /greatestHits/{hitId} {
-      // Anyone can read greatest hits
+      // Anyone authenticated can read greatest hits
       allow read: if request.auth != null;
       // Users can only create their own hits
       allow create: if request.auth != null
         && request.resource.data.userId == request.auth.uid;
-      // Users can only delete their own hits
+      // Users can only delete their own hits, admins can delete any
       allow delete: if request.auth != null
-        && resource.data.userId == request.auth.uid;
+        && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // Room Submissions collection (for user-submitted rooms pending approval)
     match /roomSubmissions/{submissionId} {
-      // Any authenticated user can read submissions (admins need this)
+      // Any authenticated user can read submissions
       allow read: if request.auth != null;
       // Any authenticated user can create a submission
       allow create: if request.auth != null
@@ -71,11 +134,37 @@ service cloud.firestore {
         && request.resource.data.prop is string
         && request.resource.data.sport is string
         && request.resource.data.status == "pending";
-      // Only admins can update (approve/reject) - for now allow any authenticated user
-      // In production, add admin check: && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
-      allow update: if request.auth != null;
-      // Only admins can delete
-      allow delete: if request.auth != null;
+      // Only admins can update (approve/reject)
+      allow update: if isAdmin();
+      // Only admins or the submitter can delete
+      allow delete: if request.auth != null
+        && (resource.data.oddieid == request.auth.uid || isAdmin());
+    }
+
+    // Admin settings collection
+    match /settings/{settingId} {
+      // Anyone authenticated can read settings
+      allow read: if request.auth != null;
+      // Only admins can write settings
+      allow write: if isAdmin();
+    }
+
+    // Admin logs collection
+    match /adminLogs/{logId} {
+      // Only admins can read logs
+      allow read: if isAdmin();
+      // Only admins can create logs
+      allow create: if isAdmin();
+      // No updates or deletes
+      allow update, delete: if false;
+    }
+
+    // Presence collection (for tracking online users)
+    match /presence/{oddieid} {
+      // Anyone authenticated can read presence
+      allow read: if request.auth != null;
+      // Users can only write their own presence
+      allow write: if request.auth != null && request.auth.uid == oddieid;
     }
   }
 }
