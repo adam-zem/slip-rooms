@@ -166,5 +166,24 @@ service cloud.firestore {
       // Users can only write their own presence
       allow write: if request.auth != null && request.auth.uid == oddieid;
     }
+
+    // Banned words collection (for profanity filter)
+    match /bannedWords/{wordId} {
+      // Only admins can read the banned words list (keep it private)
+      allow read: if isAdmin();
+      // Only admins can manage banned words
+      allow write: if isAdmin();
+    }
+
+    // Filter logs collection (for tracking filter violations)
+    match /filterLogs/{logId} {
+      // Only admins can read filter logs
+      allow read: if isAdmin();
+      // Authenticated users can create logs (when their message is blocked)
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      // No updates or deletes
+      allow update, delete: if false;
+    }
   }
 }

@@ -15,6 +15,8 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
+import { checkUsernameAvailable, reserveUsername } from "../services/accountService";
+import { checkText } from "../services/filterService";
 import "./AuthPage.css";
 
 function validateUsername(username) {
@@ -106,8 +108,28 @@ export default function AuthPage() {
     try {
       setLoading(true);
 
+      // Check profanity filter
+      const filterResult = await checkText(username);
+      if (!filterResult.isClean) {
+        setError("This username contains inappropriate language. Please choose another.");
+        setLoading(false);
+        return;
+      }
+
+      // Check if username is available (case-insensitive)
+      const { available } = await checkUsernameAvailable(username);
+      if (!available) {
+        setError("This username is already taken. Please choose another.");
+        setLoading(false);
+        return;
+      }
+
+      // Reserve the username first
+      await reserveUsername(username, pendingSocialUser.uid);
+
       await setDoc(doc(db, "users", pendingSocialUser.uid), {
         username: username.trim(),
+        usernameLower: username.trim().toLowerCase(),
         email: pendingSocialUser.email || "",
         createdAt: new Date().toISOString(),
         provider: pendingSocialUser.providerData?.[0]?.providerId || "social",
@@ -209,11 +231,27 @@ export default function AuthPage() {
         const msg = validateUsername(username);
         if (msg) throw new Error(msg);
 
+        // Check profanity filter
+        const filterResult = await checkText(username);
+        if (!filterResult.isClean) {
+          throw new Error("This username contains inappropriate language. Please choose another.");
+        }
+
+        // Check if username is available (case-insensitive)
+        const { available } = await checkUsernameAvailable(username);
+        if (!available) {
+          throw new Error("This username is already taken. Please choose another.");
+        }
+
         const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
+        // Reserve the username first
+        await reserveUsername(username, userCred.user.uid);
 
         // Save username to Firestore
         await setDoc(doc(db, "users", userCred.user.uid), {
           username: username.trim(),
+          usernameLower: username.trim().toLowerCase(),
           email: cleanEmail,
           createdAt: new Date().toISOString(),
           provider: "email",

@@ -46,11 +46,30 @@ import {
   COMMON_LINES,
   joinOrCreateRoom,
   subscribeToGameRooms,
+  deleteRoom,
+  archiveRoomsForGame,
+  cleanupArchivedRooms,
+  getAllRooms,
+  bulkDeleteRooms,
 } from "./services/roomService";
 import {
   getPlayersForCategory,
   getTeamsForGame,
 } from "./services/playerService";
+import {
+  checkText,
+  logFilterViolation,
+  preloadBannedWords,
+} from "./services/filterService";
+import {
+  deleteMessage as adminDeleteMessage,
+  muteUser,
+  banUser,
+} from "./services/adminService";
+import {
+  checkUsernameAvailable,
+  reserveUsername,
+} from "./services/accountService";
 
 
 
@@ -128,8 +147,22 @@ function UsernameSetup({ user, onComplete }) {
 
     try {
       setLoading(true);
+
+      // Check if username is available (case-insensitive)
+      const { available } = await checkUsernameAvailable(username);
+      if (!available) {
+        setError("This username is already taken. Please choose another.");
+        setLoading(false);
+        return;
+      }
+
+      // Reserve the username first
+      await reserveUsername(username, user.uid);
+
+      // Then create the user document
       await setDoc(doc(db, "users", user.uid), {
         username: username.trim(),
+        usernameLower: username.trim().toLowerCase(),
         email: user.email || "",
         createdAt: new Date().toISOString(),
         provider: user.providerData?.[0]?.providerId || "social",
@@ -293,6 +326,7 @@ function App() {
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [newMessage, setNewMessage] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [filterError, setFilterError] = useState(null); // For profanity filter messages
 
   // Media (image/GIF) state
   const [showMediaMenu, setShowMediaMenu] = useState(false);
@@ -332,6 +366,7 @@ function App() {
   // Mobile navigation state
   const [mobileView, setMobileView] = useState("rooms"); // "rooms" | "chat" | "games"
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // profile state - will be updated when userProfile loads
   const [profile, setProfile] = useState(defaultProfile);
@@ -369,6 +404,13 @@ function App() {
   const [playerSearchQuery, setPlayerSearchQuery] = useState(""); // For filtering player list
   const [gameRoomsForModal, setGameRoomsForModal] = useState([]);
 
+  // Admin contextual controls state
+  const [adminUserDropdown, setAdminUserDropdown] = useState(null); // { userId, username, position: { x, y } }
+  const [adminMuteModal, setAdminMuteModal] = useState(null); // { userId, username }
+  const [adminBanModal, setAdminBanModal] = useState(null); // { userId, username }
+  const [adminMuteDuration, setAdminMuteDuration] = useState(60); // minutes
+  const [adminBanDuration, setAdminBanDuration] = useState(1440); // minutes (24h)
+
   // refs for smart auto-scroll
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -381,6 +423,11 @@ function App() {
   // Use live messages from Firestore instead of local state
   const activeMessages = liveMessages;
 
+  // Preload banned words cache on mount
+  useEffect(() => {
+    preloadBannedWords().catch(console.error);
+  }, []);
+
   // Auto scroll effect
   useEffect(() => {
     if (!user || !activeRoom) return;
@@ -390,6 +437,14 @@ function App() {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [activeRoomId, activeMessages.length, user, activeRoom]);
+
+  // Close admin dropdown when clicking outside
+  useEffect(() => {
+    if (!adminUserDropdown) return;
+    const handleClickOutside = () => setAdminUserDropdown(null);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, [adminUserDropdown]);
 
   // Load username from Firestore profile
   useEffect(() => {
@@ -419,10 +474,11 @@ function App() {
 
   // Subscribe to trending rooms from new room system (heat map)
   // Filter by the currently selected sport tab
+  // Shows top 100 rooms sorted by user count
   useEffect(() => {
     const unsubscribe = subscribeToTrendingRooms((rooms) => {
       setTrendingRooms(rooms);
-    }, 15, activeMarketId);
+    }, 100, activeMarketId);
     return () => unsubscribe();
   }, [activeMarketId]);
 
@@ -949,9 +1005,28 @@ function App() {
 
     const username = (profile.displayName || "Guest").trim() || "Guest";
 
+    // Check profanity filter
+    try {
+      const filterResult = await checkText(text);
+      if (!filterResult.isClean) {
+        setFilterError("Your message contains inappropriate language and was not sent.");
+        // Log the violation
+        if (user?.uid) {
+          logFilterViolation(user.uid, username, text, filterResult.matchedWord, "chat").catch(console.error);
+        }
+        // Auto-clear error after 5 seconds
+        setTimeout(() => setFilterError(null), 5000);
+        return;
+      }
+    } catch (filterErr) {
+      console.error("Filter check failed:", filterErr);
+      // If filter check fails, allow message (fail open for better UX)
+    }
+
     // Clear input immediately for responsiveness
     setNewMessage("");
     setShowEmojiPicker(false);
+    setFilterError(null);
 
     try {
       // Send to Firestore - real-time listener will update the UI
@@ -1508,6 +1583,67 @@ function App() {
     }
   };
 
+  // Admin: Show user action dropdown on right-click
+  const handleUsernameContextMenu = (e, userId, username) => {
+    if (!isAdmin || !userId) return;
+    e.preventDefault();
+    const rect = e.currentTarget?.getBoundingClientRect();
+    setAdminUserDropdown({
+      userId,
+      username,
+      position: {
+        x: rect?.left || e.clientX || 100,
+        y: (rect?.bottom || e.clientY || 100) + 5
+      },
+    });
+  };
+
+  // Admin: Delete a message
+  const handleAdminDeleteMessage = async (messageId) => {
+    if (!isAdmin || !activeRoomId) return;
+    try {
+      await adminDeleteMessage(activeRoomId, messageId, user.uid);
+    } catch (error) {
+      console.error("Failed to delete message:", error);
+    }
+  };
+
+  // Admin: Open mute modal
+  const openAdminMuteModal = (userId, username) => {
+    setAdminUserDropdown(null);
+    setAdminMuteModal({ userId, username });
+  };
+
+  // Admin: Open ban modal
+  const openAdminBanModal = (userId, username) => {
+    setAdminUserDropdown(null);
+    setAdminBanModal({ userId, username });
+  };
+
+  // Admin: Mute user
+  const handleAdminMuteUser = async () => {
+    if (!adminMuteModal) return;
+    try {
+      await muteUser(adminMuteModal.userId, adminMuteDuration, user.uid, "");
+      setAdminMuteModal(null);
+      setAdminMuteDuration(60);
+    } catch (error) {
+      console.error("Failed to mute user:", error);
+    }
+  };
+
+  // Admin: Ban user
+  const handleAdminBanUser = async () => {
+    if (!adminBanModal) return;
+    try {
+      await banUser(adminBanModal.userId, adminBanDuration, user.uid, "");
+      setAdminBanModal(null);
+      setAdminBanDuration(1440);
+    } catch (error) {
+      console.error("Failed to ban user:", error);
+    }
+  };
+
   const isTyping = newMessage.trim().length > 0;
 
   // group consecutive messages from same user
@@ -1593,43 +1729,144 @@ function App() {
 
     <header className="app-header">
       <div className="brand-row">
-        <h1>
-          SLIPROOMS <span className="brand-emoji">V1</span>
-        </h1>
+        {/* Left side: Logo + Admin + DM */}
+        <div className="header-left">
+          <h1>SLIPROOMS</h1>
 
-        {/* Admin button - only for admins */}
-        {isAdmin && (
-          <button type="button" className="admin-btn" onClick={() => navigate("/admin")}>
-            🛡️ Admin
+          {/* Admin and DM buttons next to logo */}
+          <div className="header-left-btns">
+            {isAdmin && (
+              <button type="button" className="admin-btn" onClick={() => navigate("/admin")}>
+                🛡️ Admin
+              </button>
+            )}
+            <button type="button" className="dm-btn" onClick={() => setShowDMInbox(true)}>
+              📬
+              {dmUnreadCount > 0 && (
+                <span className="dm-badge">{dmUnreadCount > 9 ? "9+" : dmUnreadCount}</span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Right side: User + Logout (far right) - Desktop only */}
+        <div className="header-right">
+          <button type="button" className="profile-pill" onClick={openProfile}>
+            {userProfile?.profilePicture ? (
+              <img src={userProfile.profilePicture} alt="" className="profile-pill-img" />
+            ) : (
+              <span className={`profile-avatar profile-avatar-${profile.avatarColor}`}>
+                {profile.avatarEmoji}
+              </span>
+            )}
+            <span className="profile-pill-name">{profile.displayName}</span>
           </button>
-        )}
+          <button type="button" className="logout-btn" onClick={handleLogout}>
+            Logout
+          </button>
+        </div>
 
-        {/* DM Mailbox button */}
-        <button type="button" className="dm-btn" onClick={() => setShowDMInbox(true)}>
-          📬
+        {/* Mobile: Just avatar button that opens dropdown */}
+        <div className="header-mobile-controls">
+          {/* DM badge indicator (subtle) */}
           {dmUnreadCount > 0 && (
-            <span className="dm-badge">{dmUnreadCount > 9 ? "9+" : dmUnreadCount}</span>
+            <button
+              type="button"
+              className="mobile-dm-indicator"
+              onClick={() => setShowDMInbox(true)}
+            >
+              📬 <span className="mobile-dm-count">{dmUnreadCount > 9 ? "9+" : dmUnreadCount}</span>
+            </button>
           )}
-        </button>
 
-        {/* Profile pill in header */}
-        <button type="button" className="profile-pill" onClick={openProfile}>
-          <span
-            className={`profile-avatar profile-avatar-${profile.avatarColor}`}
+          {/* Avatar button - opens dropdown menu */}
+          <button
+            type="button"
+            className="mobile-avatar-btn"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Open menu"
           >
-            {profile.avatarEmoji}
-          </span>
-          <span className="profile-pill-name">{profile.displayName}</span>
-        </button>
-        <button type="button" className="logout-btn" onClick={handleLogout}>
-          Logout
-        </button>
+            {userProfile?.profilePicture ? (
+              <img src={userProfile.profilePicture} alt="" className="mobile-avatar-img" />
+            ) : (
+              <span className={`profile-avatar profile-avatar-${profile.avatarColor}`}>
+                {profile.avatarEmoji}
+              </span>
+            )}
+          </button>
+
+          {/* Dropdown menu */}
+          {mobileMenuOpen && (
+            <div className="mobile-dropdown" onClick={(e) => e.stopPropagation()}>
+              <div className="mobile-dropdown-header">
+                <span className="mobile-dropdown-name">{profile.displayName}</span>
+              </div>
+
+              <button
+                type="button"
+                className="mobile-dropdown-item"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setShowDMInbox(true);
+                }}
+              >
+                📬 Messages
+                {dmUnreadCount > 0 && <span className="dropdown-badge">{dmUnreadCount}</span>}
+              </button>
+
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="mobile-dropdown-item"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    navigate("/admin");
+                  }}
+                >
+                  🛡️ Admin
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="mobile-dropdown-item"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  openProfile();
+                }}
+              >
+                ⚙️ Settings
+              </button>
+
+              <div className="mobile-dropdown-divider" />
+
+              <button
+                type="button"
+                className="mobile-dropdown-item mobile-dropdown-logout"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleLogout();
+                }}
+              >
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <p>
+      <p className="header-tagline">
         Live chat rooms for sweating bets together.
       </p>
     </header>
+
+    {/* Backdrop to close mobile dropdown */}
+    {isMobile && mobileMenuOpen && (
+      <div
+        className="mobile-dropdown-backdrop"
+        onClick={() => setMobileMenuOpen(false)}
+      />
+    )}
 
     <div className={`layout ${isMobile ? "mobile" : ""} ${isMobile ? `mobile-view-${mobileView}` : ""}`}>
       {/* Sidebar */}
@@ -1775,10 +2012,12 @@ function App() {
                       <span className="message-oddie">{cluster.oddie}</span>
                     )}
                     <span
-                      className={`message-user ${cluster.userId ? "clickable" : ""}`}
+                      className={`message-user ${cluster.userId ? "clickable" : ""} ${isAdmin && cluster.userId ? "admin-clickable" : ""}`}
                       onClick={() => cluster.userId && handleUsernameClick(cluster.userId)}
+                      onContextMenu={(e) => handleUsernameContextMenu(e, cluster.userId, cluster.user)}
                       role={cluster.userId ? "button" : undefined}
                       tabIndex={cluster.userId ? 0 : undefined}
+                      title={isAdmin && cluster.userId ? "Right-click for admin options" : undefined}
                     >
                       {cluster.user}
                     </span>
@@ -1787,6 +2026,17 @@ function App() {
 
                   {cluster.messages.map((msg) => (
                     <div key={msg.id} className={`message message-bubble ${msg.type === "image" || msg.type === "gif" ? "message-media" : ""}`}>
+                      {/* Admin delete button */}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="admin-msg-delete"
+                          onClick={() => handleAdminDeleteMessage(msg.id)}
+                          title="Delete message"
+                        >
+                          ×
+                        </button>
+                      )}
                       {/* Text message */}
                       {(!msg.type || msg.type === "text") && (
                         <div className="message-text">{msg.text}</div>
@@ -1893,6 +2143,13 @@ function App() {
             </button>
           </div>
 
+          {/* Filter error message */}
+          {filterError && (
+            <div className="filter-error-toast">
+              <span>⚠️</span> {filterError}
+            </div>
+          )}
+
           {showEmojiPicker && (
             <div className="emoji-picker">
               {emojiOptions.map((emoji) => (
@@ -1914,8 +2171,8 @@ function App() {
       <aside className={`live-games-panel ${isMobile && mobileView !== "games" ? "mobile-hidden" : ""}`}>
         <div className="live-games-header">
           <h2>Games</h2>
-          <button type="button" className="refresh-btn" onClick={refreshGames}>
-            Refresh
+          <button type="button" className="refresh-btn" onClick={refreshGames} title="Refresh games">
+            {isMobile ? "↻" : "Refresh"}
           </button>
         </div>
 
@@ -1963,15 +2220,13 @@ function App() {
         )}
 
         {/* LIVE NOW Section */}
-        {liveNowGames.filter((g) => g.id !== activeGameId).length > 0 && (
+        {liveNowGames.length > 0 && (
           <>
             <div className="section-label live-section-label">
               LIVE NOW
             </div>
             <div className="games-list">
-              {liveNowGames
-                .filter((g) => g.id !== activeGameId)
-                .map((game) => {
+              {liveNowGames.map((game) => {
                   const gameData = {
                     id: game.id,
                     away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
@@ -2029,12 +2284,10 @@ function App() {
           UPCOMING
         </div>
         <div className="games-list upcoming-games-list">
-          {upcomingGames.filter((g) => g.id !== activeGameId).length === 0 ? (
+          {upcomingGames.length === 0 ? (
             <div className="no-games">No upcoming games scheduled</div>
           ) : (
-            upcomingGames
-              .filter((g) => g.id !== activeGameId)
-              .map((game) => {
+            upcomingGames.map((game) => {
                 const gameDate = new Date(game.date);
                 const isToday = gameDate.toDateString() === new Date().toDateString();
                 const isTomorrow = gameDate.toDateString() === new Date(Date.now() + 86400000).toDateString();
@@ -2101,9 +2354,7 @@ function App() {
               RECENTLY ENDED
             </div>
             <div className="games-list recent-games-list">
-              {recentGames
-                .filter((g) => g.id !== activeGameId)
-                .map((game) => {
+              {recentGames.map((game) => {
                   const gameData = {
                     id: game.id,
                     away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
@@ -2180,7 +2431,7 @@ function App() {
             className={`mobile-nav-btn ${mobileView === "games" ? "active" : ""}`}
             onClick={() => setMobileView("games")}
           >
-            <span className="mobile-nav-icon">🎮</span>
+            <span className="mobile-nav-icon">📅</span>
             <span className="mobile-nav-label">Games</span>
           </button>
         </nav>
@@ -2657,6 +2908,94 @@ function App() {
       </div>
     )}
 
+    {/* ADMIN USER DROPDOWN */}
+    {adminUserDropdown && (
+      <div
+        className="admin-user-dropdown"
+        style={{
+          position: "fixed",
+          left: adminUserDropdown.position.x,
+          top: adminUserDropdown.position.y,
+          zIndex: 9999,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="admin-dropdown-header">
+          Admin Actions for {adminUserDropdown.username}
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate(`/profile/${adminUserDropdown.userId}`)}
+        >
+          View Profile
+        </button>
+        <button
+          type="button"
+          onClick={() => openAdminMuteModal(adminUserDropdown.userId, adminUserDropdown.username)}
+        >
+          Mute User
+        </button>
+        <button
+          type="button"
+          className="danger"
+          onClick={() => openAdminBanModal(adminUserDropdown.userId, adminUserDropdown.username)}
+        >
+          Ban User
+        </button>
+      </div>
+    )}
+
+    {/* ADMIN MUTE MODAL */}
+    {adminMuteModal && (
+      <div className="admin-modal-overlay" onClick={() => setAdminMuteModal(null)}>
+        <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
+          <h3>Mute {adminMuteModal.username}</h3>
+          <div className="admin-modal-field">
+            <label>Duration</label>
+            <select
+              value={adminMuteDuration}
+              onChange={(e) => setAdminMuteDuration(Number(e.target.value))}
+            >
+              <option value={10}>10 minutes</option>
+              <option value={60}>1 hour</option>
+              <option value={1440}>24 hours</option>
+              <option value={10080}>1 week</option>
+              <option value={0}>Permanent</option>
+            </select>
+          </div>
+          <div className="admin-modal-actions">
+            <button type="button" onClick={() => setAdminMuteModal(null)}>Cancel</button>
+            <button type="button" className="warning" onClick={handleAdminMuteUser}>Mute User</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ADMIN BAN MODAL */}
+    {adminBanModal && (
+      <div className="admin-modal-overlay" onClick={() => setAdminBanModal(null)}>
+        <div className="admin-modal" onClick={(e) => e.stopPropagation()}>
+          <h3>Ban {adminBanModal.username}</h3>
+          <div className="admin-modal-field">
+            <label>Duration</label>
+            <select
+              value={adminBanDuration}
+              onChange={(e) => setAdminBanDuration(Number(e.target.value))}
+            >
+              <option value={1440}>24 hours</option>
+              <option value={10080}>1 week</option>
+              <option value={43200}>30 days</option>
+              <option value={0}>Permanent</option>
+            </select>
+          </div>
+          <div className="admin-modal-actions">
+            <button type="button" onClick={() => setAdminBanModal(null)}>Cancel</button>
+            <button type="button" className="danger" onClick={handleAdminBanUser}>Ban User</button>
+          </div>
+        </div>
+      </div>
+    )}
+
       {/* PROFILE SHEET */}
       {isProfileOpen && (
         <div
@@ -2967,19 +3306,38 @@ function App() {
               <div className="game-active-rooms">
                 <h3 className="active-rooms-title">🔥 Active Rooms</h3>
                 <div className="active-rooms-list">
-                  {gameRoomsForModal.slice(0, 5).map((room) => (
-                    <button
-                      key={room.id}
-                      className="active-room-card"
-                      onClick={() => {
-                        closeGameModal();
-                        setActiveRoomId(room.id);
-                        if (isMobile) setMobileView("chat");
-                      }}
-                    >
-                      <span className="room-name">{room.name}</span>
-                      <span className="room-users">{room.userCount || 0} sweating</span>
-                    </button>
+                  {gameRoomsForModal.slice(0, 10).map((room) => (
+                    <div key={room.id} className="active-room-card-wrapper">
+                      <button
+                        className="active-room-card"
+                        onClick={() => {
+                          closeGameModal();
+                          setActiveRoomId(room.id);
+                          if (isMobile) setMobileView("chat");
+                        }}
+                      >
+                        <span className="room-name">{room.name}</span>
+                        <span className="room-users">{room.userCount || 0} sweating</span>
+                      </button>
+                      {isAdmin && (
+                        <button
+                          className="active-room-delete-btn"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (confirm(`Delete room "${room.name}"?`)) {
+                              try {
+                                await deleteRoom(room.id);
+                              } catch (err) {
+                                console.error("Failed to delete room:", err);
+                              }
+                            }
+                          }}
+                          title="Delete room"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
