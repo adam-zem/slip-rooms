@@ -1,6 +1,7 @@
 // src/hooks/useGames.js
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchAllGames } from "../services/espnService";
+import { checkAndCleanupGames, cleanupOrphanedRooms } from "../services/gameCleanupService";
 
 const POLL_INTERVAL = 30000; // 30 seconds for live updates
 const RECENT_GAME_WINDOW = 2 * 60 * 60 * 1000; // 2 hours in ms
@@ -120,9 +121,41 @@ export function useGames() {
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  // Track previous game states to detect when games end
+  const prevGamesRef = useRef({});
+  const cleanupRanRef = useRef(false);
+
   const refresh = useCallback(async () => {
     try {
       const data = await fetchAllGames();
+
+      // Check for games that just ended (were live/scheduled, now final)
+      const allNewGames = Object.values(data).flat();
+      const prevGames = prevGamesRef.current;
+
+      // Find games that transitioned to final
+      const newlyFinishedGames = allNewGames.filter((game) => {
+        const isFinal = game.isFinal || game.status?.state === "final";
+        const wasNotFinal = prevGames[game.id] && !prevGames[game.id].isFinal;
+        return isFinal && wasNotFinal;
+      });
+
+      // Clean up rooms for newly finished games
+      if (newlyFinishedGames.length > 0) {
+        console.log(`[useGames] ${newlyFinishedGames.length} games just ended, cleaning up rooms...`);
+        checkAndCleanupGames(newlyFinishedGames);
+      }
+
+      // Update previous games ref
+      const newPrevGames = {};
+      allNewGames.forEach((game) => {
+        newPrevGames[game.id] = {
+          isFinal: game.isFinal || game.status?.state === "final",
+          isLive: game.isLive,
+        };
+      });
+      prevGamesRef.current = newPrevGames;
+
       setGamesBySport(data);
       setLastUpdated(new Date());
       setError(null);
@@ -134,9 +167,20 @@ export function useGames() {
     }
   }, []);
 
-  // Initial fetch
+  // Initial fetch and cleanup orphaned rooms
   useEffect(() => {
     refresh();
+
+    // Run orphaned room cleanup once on mount
+    if (!cleanupRanRef.current) {
+      cleanupRanRef.current = true;
+      console.log("[useGames] Running initial orphaned room cleanup...");
+      cleanupOrphanedRooms().then((result) => {
+        if (result.deleted > 0) {
+          console.log(`[useGames] Cleaned up ${result.deleted} orphaned rooms`);
+        }
+      });
+    }
   }, [refresh]);
 
   // Poll for updates (only if there are live games)

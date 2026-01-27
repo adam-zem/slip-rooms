@@ -195,6 +195,33 @@ export async function getRoom(roomId) {
 }
 
 /**
+ * Subscribe to a single room for real-time updates
+ * Useful for detecting when a room is deleted (game ended)
+ * @param {string} roomId - The room ID to subscribe to
+ * @param {Function} onUpdate - Called with room data on updates
+ * @param {Function} onDeleted - Called when room is deleted
+ */
+export function subscribeToRoom(roomId, onUpdate, onDeleted) {
+  const roomRef = doc(db, "rooms", roomId);
+
+  return onSnapshot(roomRef, (snapshot) => {
+    if (snapshot.exists()) {
+      const roomData = { id: snapshot.id, ...snapshot.data() };
+      onUpdate(roomData);
+    } else {
+      // Room was deleted
+      onDeleted();
+    }
+  }, (error) => {
+    console.error("[subscribeToRoom] Error:", error);
+    // Treat permission errors as deletion
+    if (error.code === "permission-denied") {
+      onDeleted();
+    }
+  });
+}
+
+/**
  * Subscribe to active rooms (all non-archived rooms)
  * Sorted by user count (most active first)
  * Rooms persist until their game ends or admin deletes them
@@ -811,6 +838,7 @@ export default {
   generateRoomName,
   joinOrCreateRoom,
   getRoom,
+  subscribeToRoom,
   subscribeToActiveRooms,
   subscribeToTrendingRooms,
   subscribeToGameRooms,

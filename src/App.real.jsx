@@ -42,6 +42,7 @@ import { searchGifs, getTrendingGifs, getGifCategories } from "./services/gifSer
 import {
   subscribeToActiveRooms,
   subscribeToTrendingRooms,
+  subscribeToRoom,
   getBettingCategories,
   COMMON_LINES,
   joinOrCreateRoom,
@@ -328,6 +329,7 @@ function App() {
   const [newMessage, setNewMessage] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [filterError, setFilterError] = useState(null); // For profanity filter messages
+  const [roomDeletedNotice, setRoomDeletedNotice] = useState(null); // Game ended notification
 
   // Media (image/GIF) state
   const [showMediaMenu, setShowMediaMenu] = useState(false);
@@ -544,6 +546,38 @@ function App() {
 
     return () => unsubscribe();
   }, [user]);
+
+  // Subscribe to room for real-time deletion detection (game ended)
+  useEffect(() => {
+    if (!activeRoomId) return;
+
+    const unsubscribe = subscribeToRoom(
+      activeRoomId,
+      (roomData) => {
+        // Room still exists - clear any deletion notice
+        if (roomDeletedNotice?.roomId === activeRoomId) {
+          setRoomDeletedNotice(null);
+        }
+      },
+      () => {
+        // Room was deleted (game ended)
+        console.log("[App] Room deleted (game ended):", activeRoomId);
+        setRoomDeletedNotice({
+          roomId: activeRoomId,
+          message: "Game has ended - room closed",
+        });
+
+        // Clear active room after a short delay to show the message
+        setTimeout(() => {
+          setActiveRoomId(null);
+          setRoomDeletedNotice(null);
+          if (isMobile) setMobileView("rooms");
+        }, 3000);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [activeRoomId, isMobile]);
 
   // Track user presence when joining/leaving rooms
   useEffect(() => {
@@ -2060,6 +2094,17 @@ function App() {
                 </p>
               </div>
             </div>
+
+            {/* Game Ended Notification */}
+            {roomDeletedNotice && roomDeletedNotice.roomId === activeRoomId && (
+              <div className="game-ended-notice">
+                <div className="game-ended-icon">🏁</div>
+                <div className="game-ended-text">
+                  <strong>Game has ended</strong>
+                  <span>Room closing...</span>
+                </div>
+              </div>
+            )}
 
             <div
               key={fadeKey}

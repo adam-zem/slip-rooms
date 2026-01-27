@@ -895,6 +895,59 @@ body {
   transform: scale(1.02);
 }
 
+/* Game Ended Notification */
+.game-ended-notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  margin: 16px;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05));
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-lg);
+  animation: gameEndedPulse 2s infinite;
+}
+
+@keyframes gameEndedPulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.4);
+  }
+}
+
+.game-ended-icon {
+  font-size: 32px;
+  animation: gameEndedBounce 1s infinite;
+}
+
+@keyframes gameEndedBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.game-ended-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.game-ended-text strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ef4444;
+}
+
+.game-ended-text span {
+  font-size: 13px;
+  color: var(--gray);
+}
+
 .emoji-toggle {
   padding: 10px 12px !important;
   background: transparent !important;
