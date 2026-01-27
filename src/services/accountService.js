@@ -5,10 +5,12 @@ import {
   collection,
   doc,
   getDocs,
+  getDoc,
   deleteDoc,
   query,
   where,
   writeBatch,
+  setDoc,
 } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import { deleteUser } from "firebase/auth";
@@ -233,6 +235,198 @@ async function deleteProfilePicture(userId) {
   }
 }
 
+/**
+ * Check if a username is available (case-insensitive)
+ * @param {string} username - The username to check
+ * @param {string} excludeUserId - Optional user ID to exclude (for editing own username)
+ * @returns {Promise<{available: boolean, existingUser?: string}>}
+ */
+export async function checkUsernameAvailable(username, excludeUserId = null) {
+  if (!username) return { available: false };
+
+  const usernameLower = username.trim().toLowerCase();
+
+  // Check the usernames collection (stores lowercase usernames -> userId mapping)
+  const usernameDoc = await getDoc(doc(db, "usernames", usernameLower));
+
+  if (usernameDoc.exists()) {
+    const ownerId = usernameDoc.data().userId;
+    // If it's the same user, it's available (they already own it)
+    if (excludeUserId && ownerId === excludeUserId) {
+      return { available: true };
+    }
+    return { available: false, existingUser: ownerId };
+  }
+
+  return { available: true };
+}
+
+/**
+ * Reserve a username for a user (case-insensitive)
+ * Call this when creating a new user account
+ * @param {string} username - The username to reserve
+ * @param {string} userId - The user's ID
+ */
+export async function reserveUsername(username, userId) {
+  if (!username || !userId) throw new Error("Username and userId required");
+
+  const usernameLower = username.trim().toLowerCase();
+
+  // Check if already taken
+  const { available } = await checkUsernameAvailable(username, userId);
+  if (!available) {
+    throw new Error("Username is already taken");
+  }
+
+  // Reserve the username
+  await setDoc(doc(db, "usernames", usernameLower), {
+    userId,
+    username: username.trim(), // Store original casing
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Release a username (call when deleting account or changing username)
+ * @param {string} username - The username to release
+ */
+export async function releaseUsername(username) {
+  if (!username) return;
+  const usernameLower = username.trim().toLowerCase();
+  await deleteDoc(doc(db, "usernames", usernameLower));
+}
+
+/**
+ * Migration: Reserve all existing usernames
+ * Run this once to protect existing users' usernames
+ * @returns {Promise<{migrated: number, skipped: number, errors: number}>}
+ */
+export async function migrateExistingUsernames() {
+  const usersSnapshot = await getDocs(collection(db, "users"));
+
+  let migrated = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const userDoc of usersSnapshot.docs) {
+    const userData = userDoc.data();
+    const username = userData.username;
+
+    if (!username) {
+      skipped++;
+      continue;
+    }
+
+    const usernameLower = username.trim().toLowerCase();
+
+    try {
+      // Check if already reserved
+      const existingDoc = await getDoc(doc(db, "usernames", usernameLower));
+
+      if (existingDoc.exists()) {
+        // Already reserved - skip
+        skipped++;
+        continue;
+      }
+
+      // Reserve the username
+      await setDoc(doc(db, "usernames", usernameLower), {
+        userId: userDoc.id,
+        username: username.trim(),
+        createdAt: userData.createdAt || new Date().toISOString(),
+        migratedAt: new Date().toISOString(),
+      });
+
+      migrated++;
+    } catch (err) {
+      console.error(`Failed to migrate username ${username}:`, err);
+      errors++;
+    }
+  }
+
+  return { migrated, skipped, errors };
+}
+
+/**
+ * Delete all users except specified usernames (case-insensitive)
+ * WARNING: This is destructive and cannot be undone!
+ * @param {string[]} keepUsernames - Usernames to keep (case-insensitive)
+ * @returns {Promise<{deleted: number, kept: number, errors: number}>}
+ */
+export async function deleteAllUsersExcept(keepUsernames = []) {
+  const keepLower = keepUsernames.map(u => u.toLowerCase());
+
+  const usersSnapshot = await getDocs(collection(db, "users"));
+
+  let deleted = 0;
+  let kept = 0;
+  let errors = 0;
+
+  for (const userDoc of usersSnapshot.docs) {
+    const userData = userDoc.data();
+    const username = userData.username || "";
+    const usernameLower = username.toLowerCase();
+
+    // Check if this user should be kept
+    if (keepLower.includes(usernameLower)) {
+      console.log(`Keeping user: ${username}`);
+      kept++;
+
+      // Make sure their username is reserved
+      try {
+        await setDoc(doc(db, "usernames", usernameLower), {
+          userId: userDoc.id,
+          username: username,
+          createdAt: userData.createdAt || new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error(`Failed to reserve username for ${username}:`, e);
+      }
+      continue;
+    }
+
+    // Delete this user
+    try {
+      // Delete user document
+      await deleteDoc(doc(db, "users", userDoc.id));
+
+      // Delete their username reservation if exists
+      if (usernameLower) {
+        try {
+          await deleteDoc(doc(db, "usernames", usernameLower));
+        } catch (e) {
+          // Ignore if doesn't exist
+        }
+      }
+
+      console.log(`Deleted user: ${username || userDoc.id}`);
+      deleted++;
+    } catch (err) {
+      console.error(`Failed to delete user ${username || userDoc.id}:`, err);
+      errors++;
+    }
+  }
+
+  // Also clean up any orphaned username reservations
+  const usernamesSnapshot = await getDocs(collection(db, "usernames"));
+  for (const unDoc of usernamesSnapshot.docs) {
+    if (!keepLower.includes(unDoc.id)) {
+      try {
+        await deleteDoc(doc(db, "usernames", unDoc.id));
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
+
+  return { deleted, kept, errors };
+}
+
 export default {
   deleteUserAccount,
+  checkUsernameAvailable,
+  reserveUsername,
+  releaseUsername,
+  migrateExistingUsernames,
+  deleteAllUsersExcept,
 };

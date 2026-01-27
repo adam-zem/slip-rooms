@@ -6,6 +6,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   query,
   where,
@@ -14,6 +15,8 @@ import {
   serverTimestamp,
   increment,
   Timestamp,
+  getDocs,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -43,6 +46,8 @@ export function generateRoomId(gameId, playerId, stat, line, direction) {
 /**
  * Generate a display name for the room
  * e.g., "JOSH ALLEN OVER 275.5 PASS YDS"
+ * e.g., "LOS ANGELES RAMS ML" (for moneyline)
+ * e.g., "BRONCOS +3.5" (for spread)
  */
 export function generateRoomName(player, stat, line, direction) {
   const statAbbrev = {
@@ -58,13 +63,46 @@ export function generateRoomName(player, stat, line, direction) {
     "Spread": "SPREAD",
     "Moneyline": "ML",
     "Over/Under": "TOTAL",
+    "Total": "TOTAL",
     "First TD Scorer": "1ST TD",
     "Anytime TD": "ANY TD",
+    // UFC
+    "Fight Winner": "TO WIN",
+    "KO/TKO": "BY KO/TKO",
+    "Submission": "BY SUB",
+    "Decision": "BY DEC",
   };
 
-  const statDisplay = statAbbrev[stat] || stat.toUpperCase();
   const playerName = player.split(" (")[0].toUpperCase(); // Remove team suffix if present
 
+  // Special formatting for different bet types
+  if (stat === "Moneyline") {
+    // Moneyline: "LOS ANGELES RAMS ML"
+    return `${playerName} ML`;
+  }
+
+  if (stat === "Spread") {
+    // Spread: "BRONCOS +3.5" (line already includes +/-)
+    return `${playerName} ${line}`;
+  }
+
+  if (stat === "Total") {
+    // Total: "OVER 45.5" or "UNDER 45.5"
+    return `${direction.toUpperCase()} ${line}`;
+  }
+
+  // UFC - Fight Winner
+  if (stat === "Fight Winner") {
+    return `${playerName} ${statAbbrev[stat]}`;
+  }
+
+  // UFC - Method of victory
+  if (stat === "KO/TKO" || stat === "Submission" || stat === "Decision") {
+    return `${playerName} ${statAbbrev[stat]}`;
+  }
+
+  // Default for player props: "PLAYER OVER 275.5 PASS YDS"
+  const statDisplay = statAbbrev[stat] || stat.toUpperCase();
   return `${playerName} ${direction.toUpperCase()} ${line} ${statDisplay}`;
 }
 
@@ -130,6 +168,7 @@ export async function joinOrCreateRoom({
         createdAt: serverTimestamp(),
         lastActivity: serverTimestamp(),
         visibleActive: true,
+        status: "active", // active, archived
       };
 
       await setDoc(roomRef, newRoom);
@@ -156,57 +195,15 @@ export async function getRoom(roomId) {
 }
 
 /**
- * Subscribe to active rooms (rooms with activity in last 30 minutes)
+ * Subscribe to active rooms (all non-archived rooms)
  * Sorted by user count (most active first)
+ * Rooms persist until their game ends or admin deletes them
  */
 export function subscribeToActiveRooms(callback, sport = null) {
-  const thirtyMinAgo = Timestamp.fromDate(
-    new Date(Date.now() - 30 * 60 * 1000)
-  );
-
-  let q;
-  if (sport) {
-    q = query(
-      collection(db, "rooms"),
-      where("sport", "==", sport),
-      where("lastActivity", ">=", thirtyMinAgo),
-      orderBy("lastActivity", "desc")
-    );
-  } else {
-    q = query(
-      collection(db, "rooms"),
-      where("lastActivity", ">=", thirtyMinAgo),
-      orderBy("lastActivity", "desc")
-    );
-  }
-
-  return onSnapshot(q, (snapshot) => {
-    const rooms = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-    // Sort by userCount client-side (Firestore can only order by one inequality field)
-    rooms.sort((a, b) => (b.userCount || 0) - (a.userCount || 0));
-    callback(rooms);
-  });
-}
-
-/**
- * Subscribe to trending rooms across all games
- * Shows rooms with most users
- * @param {Function} callback - Called with array of trending rooms
- * @param {number} limit - Max number of rooms to return
- * @param {string} sport - Optional sport filter (e.g., "nfl", "nba")
- */
-export function subscribeToTrendingRooms(callback, limit = 10, sport = null) {
-  const thirtyMinAgo = Timestamp.fromDate(
-    new Date(Date.now() - 30 * 60 * 1000)
-  );
-
+  // Query all rooms, we'll filter client-side for flexibility
   const q = query(
     collection(db, "rooms"),
-    where("lastActivity", ">=", thirtyMinAgo),
-    orderBy("lastActivity", "desc")
+    orderBy("userCount", "desc")
   );
 
   return onSnapshot(q, (snapshot) => {
@@ -214,7 +211,9 @@ export function subscribeToTrendingRooms(callback, limit = 10, sport = null) {
       .map((doc) => ({
         id: doc.id,
         ...doc.data(),
-      }));
+      }))
+      // Filter out archived rooms
+      .filter(r => r.status !== "archived");
 
     // Filter by sport if specified
     if (sport) {
@@ -222,23 +221,55 @@ export function subscribeToTrendingRooms(callback, limit = 10, sport = null) {
       rooms = rooms.filter(r => (r.sport || "").toLowerCase() === sportLower);
     }
 
-    // Sort by user count and limit
-    rooms = rooms
-      .sort((a, b) => (b.userCount || 0) - (a.userCount || 0))
-      .slice(0, limit);
+    // Sort by userCount client-side
+    rooms.sort((a, b) => (b.userCount || 0) - (a.userCount || 0));
+    callback(rooms);
+  });
+}
 
-    // Log trending rooms data for debugging
-    const roomsWithUsers = rooms.filter(r => (r.userCount || 0) > 0);
-    if (roomsWithUsers.length > 0) {
-      console.log("[TrendingRooms] Rooms with users:", roomsWithUsers.map(r => ({
-        id: r.id,
-        name: r.name,
-        sport: r.sport,
-        userCount: r.userCount,
-      })));
-    } else {
-      console.log("[TrendingRooms] No rooms with users for sport:", sport || "all", "total rooms:", rooms.length);
+/**
+ * Subscribe to trending rooms across all games
+ * Shows active rooms sorted by user count (most users first)
+ * Only shows rooms that are NOT archived
+ * @param {Function} callback - Called with array of trending rooms
+ * @param {number} limit - Max number of rooms to return (default 100)
+ * @param {string} sport - Optional sport filter (e.g., "nfl", "nba")
+ */
+export function subscribeToTrendingRooms(callback, limit = 100, sport = null) {
+  // Query all rooms, filter archived ones client-side
+  // (Firestore "in" doesn't work with null/undefined values)
+  const q = query(
+    collection(db, "rooms"),
+    orderBy("userCount", "desc")
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    let rooms = snapshot.docs
+      .map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }))
+      // Only show active rooms (status is "active" or undefined/null for legacy rooms)
+      // Exclude archived rooms
+      .filter(r => r.status !== "archived");
+
+    // Filter by sport if specified
+    if (sport) {
+      const sportLower = sport.toLowerCase();
+      rooms = rooms.filter(r => (r.sport || "").toLowerCase() === sportLower);
     }
+
+    // Sort by user count (most active first), then by creation time
+    rooms = rooms
+      .sort((a, b) => {
+        const userDiff = (b.userCount || 0) - (a.userCount || 0);
+        if (userDiff !== 0) return userDiff;
+        // If same user count, sort by most recent
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      })
+      .slice(0, limit);
 
     callback(rooms);
   });
@@ -246,19 +277,25 @@ export function subscribeToTrendingRooms(callback, limit = 10, sport = null) {
 
 /**
  * Subscribe to rooms for a specific game
+ * Shows all active (non-archived) rooms for the game
+ * Real-time sync - rooms appear/disappear immediately when created/deleted
  */
 export function subscribeToGameRooms(gameId, callback) {
   const q = query(
     collection(db, "rooms"),
-    where("gameId", "==", gameId),
-    orderBy("lastActivity", "desc")
+    where("gameId", "==", gameId)
   );
 
   return onSnapshot(q, (snapshot) => {
-    const rooms = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    let rooms = snapshot.docs
+      .map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }))
+      // Filter out archived rooms
+      .filter(r => r.status !== "archived");
+
+    // Sort by user count (most active first)
     rooms.sort((a, b) => (b.userCount || 0) - (a.userCount || 0));
     callback(rooms);
   });
@@ -541,6 +578,30 @@ export const BETTING_CATEGORIES_BY_SPORT = {
       isTrending: true,
     },
   ],
+  ufc: [
+    {
+      id: "fightWinner",
+      name: "Fight Winner",
+      emoji: "🥊",
+      description: "Pick the winner of the fight",
+      stats: ["Fight Winner"],
+      requiresPlayer: true,
+      isIndividualSport: true,
+      useEventCompetitors: true,
+      directPick: true,
+    },
+    {
+      id: "methodOfVictory",
+      name: "Method of Victory",
+      emoji: "💥",
+      description: "KO/TKO, Submission, Decision",
+      stats: ["KO/TKO", "Submission", "Decision"],
+      requiresPlayer: true,
+      isIndividualSport: true,
+      useEventCompetitors: true,
+      directPick: true,
+    },
+  ],
 };
 
 // Helper to get categories for a sport
@@ -593,7 +654,157 @@ export const COMMON_LINES = {
   "Moneyline": [],
   "Draw": [],
   "Total": [37.5, 40.5, 43.5, 45.5, 47.5, 49.5, 51.5, 54.5, 200.5, 210.5, 220.5, 230.5],
+
+  // UFC
+  "Fight Winner": [],
+  "KO/TKO": [],
+  "Submission": [],
+  "Decision": [],
 };
+
+/**
+ * Archive all rooms for a specific game
+ * Called when a game ends
+ * @param {string} gameId - The ESPN game ID
+ */
+export async function archiveRoomsForGame(gameId) {
+  try {
+    const q = query(
+      collection(db, "rooms"),
+      where("gameId", "==", gameId)
+    );
+
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      console.log(`[archiveRoomsForGame] No rooms found for game ${gameId}`);
+      return { archived: 0 };
+    }
+
+    const batch = writeBatch(db);
+    let count = 0;
+
+    snapshot.docs.forEach((docSnap) => {
+      const roomRef = doc(db, "rooms", docSnap.id);
+      batch.update(roomRef, {
+        status: "archived",
+        archivedAt: serverTimestamp(),
+      });
+      count++;
+    });
+
+    await batch.commit();
+    console.log(`[archiveRoomsForGame] Archived ${count} rooms for game ${gameId}`);
+
+    return { archived: count };
+  } catch (error) {
+    console.error("[archiveRoomsForGame] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a room (admin only)
+ * @param {string} roomId - The room ID to delete
+ */
+export async function deleteRoom(roomId) {
+  try {
+    const roomRef = doc(db, "rooms", roomId);
+    await deleteDoc(roomRef);
+    console.log(`[deleteRoom] Deleted room ${roomId}`);
+    return { success: true };
+  } catch (error) {
+    console.error("[deleteRoom] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Archive a single room (soft delete)
+ * @param {string} roomId - The room ID to archive
+ */
+export async function archiveRoom(roomId) {
+  try {
+    const roomRef = doc(db, "rooms", roomId);
+    await updateDoc(roomRef, {
+      status: "archived",
+      archivedAt: serverTimestamp(),
+    });
+    console.log(`[archiveRoom] Archived room ${roomId}`);
+    return { success: true };
+  } catch (error) {
+    console.error("[archiveRoom] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Clean up all archived rooms (permanent delete)
+ * Call this periodically to free up space
+ */
+export async function cleanupArchivedRooms() {
+  try {
+    const q = query(
+      collection(db, "rooms"),
+      where("status", "==", "archived")
+    );
+
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      console.log("[cleanupArchivedRooms] No archived rooms to clean up");
+      return { deleted: 0 };
+    }
+
+    const batch = writeBatch(db);
+    let count = 0;
+
+    snapshot.docs.forEach((docSnap) => {
+      batch.delete(doc(db, "rooms", docSnap.id));
+      count++;
+    });
+
+    await batch.commit();
+    console.log(`[cleanupArchivedRooms] Deleted ${count} archived rooms`);
+
+    return { deleted: count };
+  } catch (error) {
+    console.error("[cleanupArchivedRooms] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get all rooms (for admin debugging)
+ */
+export async function getAllRooms() {
+  try {
+    const q = query(collection(db, "rooms"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("[getAllRooms] Error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Bulk delete rooms by IDs (admin only)
+ */
+export async function bulkDeleteRooms(roomIds) {
+  try {
+    const batch = writeBatch(db);
+    roomIds.forEach(roomId => {
+      batch.delete(doc(db, "rooms", roomId));
+    });
+    await batch.commit();
+    console.log(`[bulkDeleteRooms] Deleted ${roomIds.length} rooms`);
+    return { deleted: roomIds.length };
+  } catch (error) {
+    console.error("[bulkDeleteRooms] Error:", error);
+    throw error;
+  }
+}
 
 export default {
   generateRoomId,
@@ -607,6 +818,12 @@ export default {
   updateRoomUserCount,
   searchRooms,
   getBettingCategories,
+  archiveRoomsForGame,
+  deleteRoom,
+  archiveRoom,
+  cleanupArchivedRooms,
+  getAllRooms,
+  bulkDeleteRooms,
   BETTING_CATEGORIES_BY_SPORT,
   COMMON_LINES,
 };

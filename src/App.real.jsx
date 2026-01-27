@@ -89,6 +89,7 @@ const initialMarkets = [
   { id: "mlb", label: "MLB", rooms: [] },
   { id: "nhl", label: "NHL", rooms: [] },
   { id: "soccer", label: "Soccer", rooms: [] },
+  { id: "ufc", label: "UFC", rooms: [] },
 ];
 
 //
@@ -1270,9 +1271,52 @@ function App() {
   };
 
   // Handle player selection
-  const handleModalPlayerSelect = (player) => {
+  const handleModalPlayerSelect = async (player) => {
     setSelectedPlayer(player);
+
+    // For directPick categories (UFC Fight Winner), create room immediately
+    if (selectedCategory?.directPick) {
+      // If category has only 1 stat, use it directly and create room
+      if (selectedCategory.stats?.length === 1) {
+        const stat = selectedCategory.stats[0];
+        await createDirectPickRoom(player, stat);
+        return;
+      }
+      // If multiple stats (Method of Victory), go to stat selection but skip line
+      setBuilderStep(2);
+      return;
+    }
+
     setBuilderStep(2);
+  };
+
+  // Create room directly for directPick categories (UFC)
+  const createDirectPickRoom = async (player, stat) => {
+    setIsCreatingRoom(true);
+    try {
+      const sport = gameModalData?.sport || "ufc";
+      const gameName = gameModalData?.name || gameModalData?.shortName || "UFC Fight";
+
+      const result = await joinOrCreateRoom({
+        gameId: gameModalData?.id,
+        gameName,
+        playerId: player.id || player.name,
+        playerName: player.name,
+        stat,
+        line: "", // No line for direct picks
+        direction: "WIN", // Default direction for winners
+        sport,
+      });
+
+      // Navigate to the room
+      closeGameModal();
+      setActiveRoomId(result.roomId);
+      if (isMobile) setMobileView("chat");
+    } catch (error) {
+      console.error("Error creating direct pick room:", error);
+    } finally {
+      setIsCreatingRoom(false);
+    }
   };
 
   // Handle team selection (for game lines)
@@ -1360,8 +1404,15 @@ function App() {
   };
 
   // Handle stat selection
-  const handleModalStatSelect = (stat) => {
+  const handleModalStatSelect = async (stat) => {
     setSelectedStat(stat);
+
+    // For directPick categories (UFC Method of Victory), create room directly
+    if (selectedCategory?.directPick && selectedPlayer) {
+      await createDirectPickRoom(selectedPlayer, stat);
+      return;
+    }
+
     if (stat === "Moneyline" || stat === "Draw") {
       setSelectedLine("YES");
       setBuilderStep(4);
@@ -1405,9 +1456,14 @@ function App() {
 
       console.log("Creating prop room:", { gameId: gameModalData?.id, playerId, playerName, stat: selectedStat, line, direction });
 
+      // Generate game name based on sport type
+      const gameName = gameModalData?.isIndividualSport
+        ? gameModalData?.shortName || gameModalData?.name || "Event"
+        : `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`;
+
       const result = await joinOrCreateRoom({
         gameId: gameModalData?.id,
-        gameName: `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`,
+        gameName,
         playerId,
         playerName,
         stat: selectedStat,
@@ -1447,9 +1503,14 @@ function App() {
         ? `${selectedPlayer.name}${selectedPlayer.team ? ` (${selectedPlayer.team})` : ""}`
         : gameModalData?.home?.name || "TEAM";
 
+      // Generate game name based on sport type
+      const gameName = gameModalData?.isIndividualSport
+        ? gameModalData?.shortName || gameModalData?.name || "Event"
+        : `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`;
+
       const result = await joinOrCreateRoom({
         gameId: gameModalData?.id,
-        gameName: `${gameModalData?.away?.name || gameModalData?.away?.abbrev || "AWAY"} vs ${gameModalData?.home?.name || gameModalData?.home?.abbrev || "HOME"}`,
+        gameName,
         playerId, // Use player ID for room ID uniqueness
         playerName, // Use display name for room title
         stat: selectedStat,
@@ -2229,14 +2290,27 @@ function App() {
               {liveNowGames.map((game) => {
                   const gameData = {
                     id: game.id,
-                    away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
-                    home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                    away: game.isIndividualSport ? null : { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                    home: game.isIndividualSport ? null : { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
                     awayScore: game.awayTeam?.score,
                     homeScore: game.homeTeam?.score,
                     status: "live",
                     time: `${getPeriodLabel(activeMarketId, game.status.period)} ${game.status.clock || ""}`,
                     sport: activeMarketId,
+                    isIndividualSport: game.isIndividualSport,
+                    name: game.name,
+                    shortName: game.shortName,
+                    competitors: game.competitors,
+                    fights: game.fights,
+                    // UFC-specific
+                    isFight: game.isFight,
+                    eventName: game.eventName,
+                    weightClass: game.weightClass,
+                    fighter1: game.fighter1,
+                    fighter2: game.fighter2,
                   };
+
+                  // Render game card
                   return (
                     <div
                       key={game.id}
@@ -2281,11 +2355,11 @@ function App() {
 
         {/* UPCOMING Section */}
         <div className="section-label upcoming-section-label">
-          UPCOMING
+          {activeMarketId === "ufc" ? "FIGHTS" : "UPCOMING"}
         </div>
         <div className="games-list upcoming-games-list">
           {upcomingGames.length === 0 ? (
-            <div className="no-games">No upcoming games scheduled</div>
+            <div className="no-games">No upcoming {activeMarketId === "ufc" ? "fights" : "games"} scheduled</div>
           ) : (
             upcomingGames.map((game) => {
                 const gameDate = new Date(game.date);
@@ -2300,14 +2374,29 @@ function App() {
 
                 const gameData = {
                   id: game.id,
-                  away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
-                  home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                  away: game.isIndividualSport ? null : { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                  home: game.isIndividualSport ? null : { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
                   awayScore: 0,
                   homeScore: 0,
                   status: "scheduled",
                   time: timeLabel,
                   sport: activeMarketId,
+                  isIndividualSport: game.isIndividualSport,
+                  name: game.name,
+                  shortName: game.shortName,
+                  competitors: game.competitors,
+                  fights: game.fights,
+                  venue: game.venue,
+                  location: game.location,
+                  // UFC-specific
+                  isFight: game.isFight,
+                  eventName: game.eventName,
+                  weightClass: game.weightClass,
+                  fighter1: game.fighter1,
+                  fighter2: game.fighter2,
                 };
+
+                // Render game card
                 return (
                   <div
                     key={game.id}
@@ -2357,14 +2446,27 @@ function App() {
               {recentGames.map((game) => {
                   const gameData = {
                     id: game.id,
-                    away: { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
-                    home: { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
+                    away: game.isIndividualSport ? null : { id: game.awayTeam?.id, abbrev: game.awayTeam?.abbreviation, name: game.awayTeam?.name, logo: game.awayTeam?.logo },
+                    home: game.isIndividualSport ? null : { id: game.homeTeam?.id, abbrev: game.homeTeam?.abbreviation, name: game.homeTeam?.name, logo: game.homeTeam?.logo },
                     awayScore: game.awayTeam?.score,
                     homeScore: game.homeTeam?.score,
                     status: "final",
                     time: "Final",
                     sport: activeMarketId,
+                    isIndividualSport: game.isIndividualSport,
+                    name: game.name,
+                    shortName: game.shortName,
+                    competitors: game.competitors,
+                    fights: game.fights,
+                    // UFC-specific
+                    isFight: game.isFight,
+                    eventName: game.eventName,
+                    weightClass: game.weightClass,
+                    fighter1: game.fighter1,
+                    fighter2: game.fighter2,
                   };
+
+                  // Render game card
                   return (
                     <div
                       key={game.id}
@@ -2573,6 +2675,7 @@ function App() {
                   <option value="mlb">MLB</option>
                   <option value="nhl">NHL</option>
                   <option value="soccer">Soccer</option>
+                  <option value="ufc">UFC</option>
                 </select>
               </div>
 
@@ -2595,9 +2698,15 @@ function App() {
                         disabled={submitting}
                       >
                         <div className="game-select-teams">
-                          <span>{game.awayTeam?.abbreviation}</span>
-                          <span className="game-select-at">@</span>
-                          <span>{game.homeTeam?.abbreviation}</span>
+                          {game.isIndividualSport ? (
+                            <span className="event-name">{game.shortName || game.name}</span>
+                          ) : (
+                            <>
+                              <span>{game.awayTeam?.abbreviation}</span>
+                              <span className="game-select-at">@</span>
+                              <span>{game.homeTeam?.abbreviation}</span>
+                            </>
+                          )}
                         </div>
                         <div className="game-select-status">
                           {game.isLive ? (
@@ -3241,33 +3350,65 @@ function App() {
                 ×
               </button>
 
-              <div className="game-modal-matchup">
-                <div className="game-modal-team away">
-                  {gameModalData?.away?.logo && (
-                    <img src={gameModalData.away.logo} alt="" className="game-modal-logo" />
+              {gameModalData?.isFight ? (
+                /* UFC Fight Header */
+                <div className="game-modal-fight">
+                  {gameModalData?.eventName && (
+                    <div className="fight-event-name">{gameModalData.eventName}</div>
                   )}
-                  <span className="game-modal-abbrev">{gameModalData?.away?.abbrev || "AWAY"}</span>
-                </div>
-
-                <div className="game-modal-vs">
-                  {gameModalData?.status === "live" ? (
-                    <div className="game-modal-score">
-                      <span>{gameModalData?.awayScore || 0}</span>
-                      <span className="score-divider">-</span>
-                      <span>{gameModalData?.homeScore || 0}</span>
+                  <div className="game-modal-matchup fight-matchup">
+                    <div className="game-modal-team away fighter">
+                      {gameModalData?.away?.logo && (
+                        <img src={gameModalData.away.logo} alt="" className="game-modal-logo fighter-photo" />
+                      )}
+                      <span className="game-modal-abbrev fighter-name">{gameModalData?.away?.abbrev || gameModalData?.fighter1?.name || "TBD"}</span>
                     </div>
-                  ) : (
-                    <span className="vs-text">VS</span>
-                  )}
-                </div>
 
-                <div className="game-modal-team home">
-                  {gameModalData?.home?.logo && (
-                    <img src={gameModalData.home.logo} alt="" className="game-modal-logo" />
+                    <div className="game-modal-vs">
+                      <span className="vs-text">VS</span>
+                    </div>
+
+                    <div className="game-modal-team home fighter">
+                      {gameModalData?.home?.logo && (
+                        <img src={gameModalData.home.logo} alt="" className="game-modal-logo fighter-photo" />
+                      )}
+                      <span className="game-modal-abbrev fighter-name">{gameModalData?.home?.abbrev || gameModalData?.fighter2?.name || "TBD"}</span>
+                    </div>
+                  </div>
+                  {gameModalData?.weightClass && (
+                    <div className="fight-weight-class">{gameModalData.weightClass}</div>
                   )}
-                  <span className="game-modal-abbrev">{gameModalData?.home?.abbrev || "HOME"}</span>
                 </div>
-              </div>
+              ) : (
+                /* Team Sport Header */
+                <div className="game-modal-matchup">
+                  <div className="game-modal-team away">
+                    {gameModalData?.away?.logo && (
+                      <img src={gameModalData.away.logo} alt="" className="game-modal-logo" />
+                    )}
+                    <span className="game-modal-abbrev">{gameModalData?.away?.abbrev || "AWAY"}</span>
+                  </div>
+
+                  <div className="game-modal-vs">
+                    {gameModalData?.status === "live" ? (
+                      <div className="game-modal-score">
+                        <span>{gameModalData?.awayScore || 0}</span>
+                        <span className="score-divider">-</span>
+                        <span>{gameModalData?.homeScore || 0}</span>
+                      </div>
+                    ) : (
+                      <span className="vs-text">VS</span>
+                    )}
+                  </div>
+
+                  <div className="game-modal-team home">
+                    {gameModalData?.home?.logo && (
+                      <img src={gameModalData.home.logo} alt="" className="game-modal-logo" />
+                    )}
+                    <span className="game-modal-abbrev">{gameModalData?.home?.abbrev || "HOME"}</span>
+                  </div>
+                </div>
+              )}
 
               <div className="game-modal-time">
                 {gameModalData?.status === "live" ? (

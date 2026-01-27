@@ -8,7 +8,11 @@ const SPORT_ENDPOINTS = {
   mlb: `${ESPN_BASE}/baseball/mlb/scoreboard`,
   nhl: `${ESPN_BASE}/hockey/nhl/scoreboard`,
   soccer: `${ESPN_BASE}/soccer/usa.1/scoreboard`, // MLS
+  ufc: `${ESPN_BASE}/mma/ufc/scoreboard`, // UFC
 };
+
+// Individual sports (non-team based)
+const INDIVIDUAL_SPORTS = ["ufc"];
 
 // How many days ahead to fetch upcoming games
 const DAYS_AHEAD = 7;
@@ -90,6 +94,11 @@ function shouldShowGame(event, sportId) {
       // Show all soccer - leagues handle their own scheduling
       return true;
 
+
+    case "ufc":
+      // Show all UFC events
+      return true;
+
     default:
       break;
   }
@@ -116,6 +125,100 @@ function parseTeam(competitor) {
       value: parseInt(ls.value, 10) || 0,
     })),
   };
+}
+
+/**
+ * Parse UFC event data - returns an ARRAY of fights (each fight is separate like an NFL game)
+ * Each fight becomes its own "game" that users can bet on individually
+ */
+function parseUFCEvent(event) {
+  const competitions = event.competitions || [];
+  const eventName = event.shortName || event.name;
+  const eventDate = event.date;
+  const fights = [];
+
+  const parseFighter = (c) => {
+    const athlete = c.athlete || {};
+    const record = c.records?.find(r => r.type === "total")?.summary || "";
+    return {
+      id: c.id || athlete.id,
+      name: athlete.displayName || athlete.fullName || "TBD",
+      shortName: athlete.shortName || athlete.displayName || "TBD",
+      record: record,
+      winner: c.winner || false,
+      headshot: athlete.headshot?.href || null,
+      country: athlete.flag?.alt || "",
+    };
+  };
+
+  // Each competition (fight) becomes its own separate game entry
+  for (const competition of competitions) {
+    const competitors = competition.competitors || [];
+    if (competitors.length >= 2) {
+      const fighter1 = parseFighter(competitors[0]);
+      const fighter2 = parseFighter(competitors[1]);
+      const weightClass = competition.type?.abbreviation || competition.type?.text || "";
+
+      // Determine fight state from competition status
+      const compStatus = competition.status || {};
+      const compStatusType = compStatus.type || {};
+      const statusId = parseInt(compStatusType.id, 10);
+      let gameState = "scheduled";
+      if (statusId === 1) gameState = "scheduled";
+      else if (statusId === 2 || statusId === 22 || statusId === 23) gameState = "live";
+      else if (statusId === 3) gameState = "final";
+      else if (statusId === 5 || statusId === 6) gameState = "postponed";
+
+      fights.push({
+        id: competition.id,
+        uid: competition.uid,
+        name: `${fighter1.name} vs ${fighter2.name}`,
+        shortName: `${fighter1.shortName} vs ${fighter2.shortName}`,
+        date: competition.date || eventDate,
+        venue: competition.venue?.fullName || "",
+        eventName: eventName, // Parent event name (e.g., "UFC 324")
+
+        // Fight-specific data (similar to team sports structure)
+        fighter1: fighter1,
+        fighter2: fighter2,
+        weightClass: weightClass,
+
+        // For compatibility with team sport display
+        awayTeam: {
+          id: fighter1.id,
+          name: fighter1.name,
+          abbreviation: fighter1.shortName,
+          logo: fighter1.headshot,
+          score: fighter1.winner ? "W" : "",
+        },
+        homeTeam: {
+          id: fighter2.id,
+          name: fighter2.name,
+          abbreviation: fighter2.shortName,
+          logo: fighter2.headshot,
+          score: fighter2.winner ? "W" : "",
+        },
+
+        status: {
+          state: gameState,
+          period: compStatus.period || 0,
+          clock: compStatus.displayClock || "",
+          detail: compStatusType.detail || compStatusType.description || "",
+          description: compStatusType.description || "",
+        },
+
+        isLive: gameState === "live",
+        isFinal: gameState === "final",
+        isScheduled: gameState === "scheduled",
+
+        // Mark as UFC fight for special rendering
+        sportType: "ufc",
+        isFight: true,
+      });
+    }
+  }
+
+  return fights;
 }
 
 /**
@@ -188,10 +291,17 @@ export async function fetchGames(sportId) {
     const data = await response.json();
     const events = data.events || [];
 
-    // Filter out preseason/exhibition games, then parse
-    return events
-      .filter((event) => shouldShowGame(event, sportId))
-      .map(parseGame);
+    // Filter out preseason/exhibition games, then parse with appropriate parser
+    const filteredEvents = events.filter((event) => shouldShowGame(event, sportId));
+
+    // Use sport-specific parsers for individual sports
+    if (sportId === "ufc") {
+      // UFC: parseUFCEvent returns an array of fights per event, so flatten them
+      return filteredEvents.flatMap(parseUFCEvent);
+    }
+
+    // Default team sport parser
+    return filteredEvents.map(parseGame);
   } catch (error) {
     console.error(`Failed to fetch ${sportId} games:`, error);
     return [];
@@ -236,6 +346,8 @@ export function getPeriodLabel(sportId, period) {
       return period <= 9 ? `${period}${getOrdinalSuffix(period)}` : `${period}th`;
     case "soccer":
       return period === 1 ? "1H" : "2H";
+    case "ufc":
+      return `Round ${period}`;
     default:
       return `${period}`;
   }

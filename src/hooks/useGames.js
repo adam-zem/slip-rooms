@@ -56,6 +56,11 @@ function getGameProgress(game, sportId) {
       const totalElapsed = (period - 1) * halfLength + elapsedInHalf;
       return (totalElapsed / (2 * halfLength)) * 100;
     }
+    case "ufc": {
+      // UFC fights are 3 rounds (5 for championship)
+      const totalRounds = 5; // Use 5 as max
+      return (period / totalRounds) * 100;
+    }
     default:
       return period * 10; // Fallback
   }
@@ -109,6 +114,7 @@ export function useGames() {
     mlb: [],
     nhl: [],
     soccer: [],
+    ufc: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

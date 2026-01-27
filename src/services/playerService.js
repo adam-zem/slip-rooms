@@ -765,9 +765,52 @@ export async function getPlayersForGame(sport, gameData, positions = []) {
 }
 
 /**
+ * Get fighters for a UFC fight
+ * Returns the two fighters from the fight data formatted as "players"
+ */
+function getFightersForUFC(gameData) {
+  const fighters = [];
+
+  // Fighter 1 (mapped to away)
+  if (gameData?.fighter1 || gameData?.away) {
+    const f1 = gameData.fighter1 || {};
+    const away = gameData.away || {};
+    fighters.push({
+      id: f1.id || away.id || "fighter1",
+      name: f1.name || away.name || away.abbrev || "Fighter 1",
+      position: gameData?.weightClass || "Fighter",
+      team: gameData?.eventName || "UFC",
+      headshot: f1.headshot || away.logo || "",
+      isFighter: true,
+    });
+  }
+
+  // Fighter 2 (mapped to home)
+  if (gameData?.fighter2 || gameData?.home) {
+    const f2 = gameData.fighter2 || {};
+    const home = gameData.home || {};
+    fighters.push({
+      id: f2.id || home.id || "fighter2",
+      name: f2.name || home.name || home.abbrev || "Fighter 2",
+      position: gameData?.weightClass || "Fighter",
+      team: gameData?.eventName || "UFC",
+      headshot: f2.headshot || home.logo || "",
+      isFighter: true,
+    });
+  }
+
+  return fighters;
+}
+
+/**
  * Get players filtered by position for a specific category
  */
 export async function getPlayersForCategory(sport, gameData, category) {
+  // Handle UFC fights - return fighters directly from game data
+  if (sport?.toLowerCase() === "ufc" || gameData?.isFight) {
+    return getFightersForUFC(gameData);
+  }
+
   const positions = category?.positions || [];
   return getPlayersForGame(sport, gameData, positions);
 }
@@ -808,5 +851,6 @@ export default {
   getPlayersForGame,
   getPlayersForCategory,
   getTeamsForGame,
+  getFightersForUFC,
   clearRosterCache,
 };

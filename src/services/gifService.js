@@ -73,9 +73,10 @@ export async function getTrendingGifs(limit = 20) {
 function parseGifResults(results) {
   return results.map((item) => {
     const images = item.images || {};
-    // Use fixed_height for display, downsized for preview
+    // Use fixed_height for both display and preview (better quality)
     const gif = images.fixed_height || images.original;
-    const preview = images.fixed_height_small || images.downsized || gif;
+    // Use fixed_width_small for grid preview (200px wide, good quality)
+    const preview = images.fixed_width || images.fixed_height || gif;
 
     return {
       id: item.id,
