@@ -358,6 +358,8 @@ body {
 }
 
 .market-tab {
+  display: inline-flex;
+  align-items: center;
   padding: 8px 16px;
   border-radius: 20px;
   background: transparent;
@@ -367,6 +369,8 @@ body {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .market-tab:hover {
@@ -379,6 +383,55 @@ body {
   border-color: var(--matrix-green);
   color: var(--matrix-green);
   font-weight: 600;
+}
+
+.market-tab.has-live {
+  border-color: #ef4444;
+  animation: livePulse 2s infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.3); }
+}
+
+.market-tab.has-live.active {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.market-live-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  background: #ef4444;
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  animation: liveBlink 1.5s infinite;
+}
+
+@keyframes liveBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.market-today-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--matrix-green);
+  color: var(--black);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9px;
 }
 
 /* ===============================

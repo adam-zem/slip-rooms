@@ -2008,14 +2008,16 @@ function App() {
           {markets.map((market) => (
             <button
               key={market.id}
-              className={
-                market.id === activeMarketId
-                  ? "market-tab active"
-                  : "market-tab"
-              }
+              className={`market-tab ${market.id === activeMarketId ? "active" : ""} ${market.liveGames > 0 ? "has-live" : ""}`}
               onClick={() => handleMarketChange(market.id)}
             >
               {market.label}
+              {market.liveGames > 0 && (
+                <span className="market-live-badge">{market.liveGames} LIVE</span>
+              )}
+              {market.liveGames === 0 && market.todayGames > 0 && (
+                <span className="market-today-badge">{market.todayGames}</span>
+              )}
             </button>
           ))}
         </div>
