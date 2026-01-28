@@ -3133,15 +3133,7 @@ body {
   .market-tabs {
     gap: 4px;
     margin-bottom: 12px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .market-tabs::-webkit-scrollbar {
-    display: none;
+    flex-wrap: wrap;
   }
 
   .market-tab {
@@ -4767,16 +4759,9 @@ body {
 
   .market-tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 20px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding-bottom: 4px;
-  }
-
-  .market-tabs::-webkit-scrollbar {
-    display: none;
   }
 
   .market-tab {
