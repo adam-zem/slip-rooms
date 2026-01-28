@@ -71,6 +71,7 @@ import {
   checkUsernameAvailable,
   reserveUsername,
 } from "./services/accountService";
+import { getSortedSportsFromData } from "./services/sportRelevanceService";
 
 
 
@@ -430,6 +431,30 @@ function App() {
   useEffect(() => {
     preloadBannedWords().catch(console.error);
   }, []);
+
+  // Sort markets by relevance when game data changes
+  useEffect(() => {
+    // Only sort if we have game data
+    const hasGames = Object.values(gamesBySport).some((games) => games.length > 0);
+    if (!hasGames) return;
+
+    console.log("[App] Sorting markets by relevance...");
+    const sortedMarkets = getSortedSportsFromData(gamesBySport);
+
+    setMarkets((prev) => {
+      // Preserve existing room data while reordering
+      return sortedMarkets.map((sorted) => {
+        const existing = prev.find((m) => m.id === sorted.id);
+        return {
+          ...sorted,
+          rooms: existing?.rooms || [],
+        };
+      });
+    });
+
+    // If current active market is now ranked low, consider switching to most relevant
+    // But only on initial load, not on every update
+  }, [gamesBySport]);
 
   // Auto scroll effect
   useEffect(() => {
