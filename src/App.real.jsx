@@ -433,12 +433,21 @@ function App() {
   }, []);
 
   // Sort markets by relevance when game data changes
+  // Use JSON stringified game counts as dependency to detect actual data changes
+  const gameCountsKey = useMemo(() => {
+    return Object.entries(gamesBySport)
+      .map(([sport, games]) => `${sport}:${games.length}`)
+      .join(",");
+  }, [gamesBySport]);
+
+  const marketsSortedRef = useRef(false);
+
   useEffect(() => {
     // Only sort if we have game data
     const hasGames = Object.values(gamesBySport).some((games) => games.length > 0);
     if (!hasGames) return;
 
-    console.log("[App] Sorting markets by relevance...");
+    console.log("[App] Sorting markets by relevance...", gameCountsKey);
     const sortedMarkets = getSortedSportsFromData(gamesBySport);
 
     setMarkets((prev) => {
@@ -452,9 +461,13 @@ function App() {
       });
     });
 
-    // If current active market is now ranked low, consider switching to most relevant
-    // But only on initial load, not on every update
-  }, [gamesBySport]);
+    // On first sort, set active market to the most relevant sport
+    if (!marketsSortedRef.current && sortedMarkets.length > 0) {
+      marketsSortedRef.current = true;
+      setActiveMarketId(sortedMarkets[0].id);
+      console.log("[App] Set active market to most relevant:", sortedMarkets[0].id);
+    }
+  }, [gameCountsKey]);
 
   // Auto scroll effect
   useEffect(() => {
