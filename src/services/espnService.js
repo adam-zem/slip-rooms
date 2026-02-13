@@ -14,8 +14,8 @@ const SPORT_ENDPOINTS = {
 // Individual sports (non-team based)
 const INDIVIDUAL_SPORTS = ["ufc"];
 
-// How many days ahead to fetch upcoming games
-const DAYS_AHEAD = 7;
+// How many days ahead to fetch upcoming games (14 days to capture Super Bowl, etc.)
+const DAYS_AHEAD = 14;
 
 /**
  * Format date as YYYYMMDD for ESPN API
@@ -57,13 +57,9 @@ function shouldShowGame(event, sportId) {
   const seasonType = event.season?.type;
   const seasonSlug = event.season?.slug || "";
   const competitionType = event.competitions?.[0]?.type?.abbreviation || "";
+  const gameName = (event.name || event.shortName || "").toLowerCase();
 
-  // Always show regular season and postseason
-  if (seasonType === SEASON_TYPES.REGULAR || seasonType === SEASON_TYPES.POSTSEASON) {
-    return true;
-  }
-
-  // Sport-specific preseason filtering
+  // Sport-specific filtering
   switch (sportId) {
     case "mlb":
       // Hide ALL spring training and exhibition games
@@ -76,6 +72,9 @@ function shouldShowGame(event, sportId) {
       // Hide preseason games (Hall of Fame game, preseason weeks)
       if (seasonType === SEASON_TYPES.PRESEASON) return false;
       if (seasonSlug === "preseason") return false;
+      // FILTER OUT PRO BOWL - it's an all-star exhibition game
+      if (gameName.includes("pro bowl")) return false;
+      if (gameName.includes("afc vs nfc") || gameName.includes("nfc vs afc")) return false;
       break;
 
     case "nba":
@@ -93,7 +92,6 @@ function shouldShowGame(event, sportId) {
     case "soccer":
       // Show all soccer - leagues handle their own scheduling
       return true;
-
 
     case "ufc":
       // Show all UFC events

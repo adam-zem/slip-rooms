@@ -7,6 +7,7 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
   signInWithPopup,
+  signOut,
   GoogleAuthProvider,
   OAuthProvider,
   setPersistence,
@@ -17,6 +18,7 @@ import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { checkUsernameAvailable, reserveUsername } from "../services/accountService";
 import { checkText } from "../services/filterService";
+import { useAuth } from "../contexts/AuthContext";
 import "./AuthPage.css";
 
 function validateUsername(username) {
@@ -52,6 +54,7 @@ const appleProvider = new OAuthProvider("apple.com");
 
 export default function AuthPage() {
   const navigate = useNavigate();
+  const { user, userProfile, authReady, needsUsername } = useAuth();
 
   const [mode, setMode] = useState("login"); // "login" | "signup" | "forgot" | "username" | "verify"
   const isSignup = mode === "signup";
@@ -87,6 +90,15 @@ export default function AuthPage() {
 
   // Generate matrix characters once on mount
   const matrixChars = useMemo(() => generateMatrixChars(80), []);
+
+  // Auto-detect if user is logged in but needs a username
+  // This happens when they started social login but didn't complete username setup
+  useEffect(() => {
+    if (authReady && user && needsUsername && mode !== "username") {
+      setPendingSocialUser(user);
+      setMode("username");
+    }
+  }, [authReady, user, needsUsername, mode]);
 
   // Check if user exists in Firestore (has username)
   const checkUserExists = async (uid) => {
@@ -396,6 +408,19 @@ export default function AuthPage() {
               ) : (
                 "Enter the Room"
               )}
+            </button>
+
+            <button
+              type="button"
+              className="auth-back-link"
+              onClick={async () => {
+                await signOut(auth);
+                setPendingSocialUser(null);
+                setMode("login");
+              }}
+              disabled={loading}
+            >
+              Use a different account
             </button>
           </form>
         </div>

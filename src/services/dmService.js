@@ -166,11 +166,15 @@ export function subscribeToMessages(conversationId, callback) {
   const q = query(messagesRef, orderBy("timestamp", "asc"));
 
   return onSnapshot(q, (snapshot) => {
-    const messages = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-      timestamp: doc.data().timestamp?.toDate?.() || new Date(),
-    }));
+    const messages = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        timestamp: data.timestamp?.toDate?.() || new Date(),
+        sharedContent: data.sharedContent || null,
+      };
+    });
     callback(messages);
   });
 }

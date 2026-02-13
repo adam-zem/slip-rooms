@@ -72,6 +72,7 @@ import {
   reserveUsername,
 } from "./services/accountService";
 import { getSortedSportsFromData } from "./services/sportRelevanceService";
+import ShareModal from "./components/ShareModal";
 
 
 
@@ -120,93 +121,6 @@ function formatTime(timestamp) {
 //
 // ---------------- COMPONENT ----------------
 //
-
-// Username setup component for social login users
-function UsernameSetup({ user, onComplete }) {
-  const [username, setUsername] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const validateUsername = (u) => {
-    const trimmed = (u || "").trim();
-    if (!trimmed) return "Username is required.";
-    if (trimmed.length < 3) return "Username must be at least 3 characters.";
-    if (trimmed.length > 20) return "Username must be 20 characters or less.";
-    if (!/^[a-zA-Z0-9_]+$/.test(trimmed)) {
-      return "Username can only use letters, numbers, and underscores.";
-    }
-    return "";
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-
-    const msg = validateUsername(username);
-    if (msg) {
-      setError(msg);
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      // Check if username is available (case-insensitive)
-      const { available } = await checkUsernameAvailable(username);
-      if (!available) {
-        setError("This username is already taken. Please choose another.");
-        setLoading(false);
-        return;
-      }
-
-      // Reserve the username first
-      await reserveUsername(username, user.uid);
-
-      // Then create the user document
-      await setDoc(doc(db, "users", user.uid), {
-        username: username.trim(),
-        usernameLower: username.trim().toLowerCase(),
-        email: user.email || "",
-        createdAt: new Date().toISOString(),
-        provider: user.providerData?.[0]?.providerId || "social",
-      });
-      onComplete();
-    } catch (err) {
-      setError(err?.message || "Failed to save username.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="username-setup">
-      <div className="username-setup-container">
-        <h1 className="username-setup-logo">SLIPROOMS</h1>
-        <p className="username-setup-tagline">one last thing...</p>
-
-        <form onSubmit={handleSubmit} className="username-setup-form">
-          <p className="username-setup-prompt">Choose a username for the chat rooms</p>
-
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Username"
-            disabled={loading}
-            className="username-setup-input"
-            autoFocus
-          />
-
-          {error && <div className="username-setup-error">{error}</div>}
-
-          <button type="submit" disabled={loading} className="username-setup-btn">
-            {loading ? "Saving..." : "Enter the Room"}
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
 
 // Room search component
 function RoomSearch({ allRooms, onSelectRoom, activeMarketId }) {
@@ -414,6 +328,12 @@ function App() {
   const [adminBanModal, setAdminBanModal] = useState(null); // { userId, username }
   const [adminMuteDuration, setAdminMuteDuration] = useState(60); // minutes
   const [adminBanDuration, setAdminBanDuration] = useState(1440); // minutes (24h)
+
+  // Share modal state
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareModalType, setShareModalType] = useState(null); // "room" | "post"
+  const [shareModalRoom, setShareModalRoom] = useState(null);
+  const [shareModalPost, setShareModalPost] = useState(null);
 
   // refs for smart auto-scroll
   const messagesEndRef = useRef(null);
@@ -873,8 +793,9 @@ function App() {
   }
 
   // User is logged in but needs to create a username (social login)
+  // Redirect to AuthPage which has a proper username prompt
   if (needsUsername) {
-    return <UsernameSetup user={user} onComplete={refreshProfile} />;
+    return <AuthPage />;
   }
 
   // ------------------- COMPUTED VALUES -------------------
@@ -1777,6 +1698,30 @@ function App() {
     }
   };
 
+  // Share: Open share modal for a room
+  const openShareRoom = (room) => {
+    setShareModalType("room");
+    setShareModalRoom(room);
+    setShareModalPost(null);
+    setShareModalOpen(true);
+  };
+
+  // Share: Open share modal for a post
+  const openSharePost = (post) => {
+    setShareModalType("post");
+    setShareModalPost(post);
+    setShareModalRoom(null);
+    setShareModalOpen(true);
+  };
+
+  // Share: Close share modal
+  const closeShareModal = () => {
+    setShareModalOpen(false);
+    setShareModalType(null);
+    setShareModalRoom(null);
+    setShareModalPost(null);
+  };
+
   const isTyping = newMessage.trim().length > 0;
 
   // group consecutive messages from same user
@@ -2056,16 +2001,29 @@ function App() {
                       🔥 {room.userCount || 0} sweating
                     </div>
                   </div>
-                  {isAdmin && (
+                  <div className="room-actions">
                     <button
                       type="button"
-                      className="room-delete-btn"
-                      onClick={(e) => handleDeleteRoom(e, room.id)}
-                      title="Delete room"
+                      className="room-share-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openShareRoom(room);
+                      }}
+                      title="Share room"
                     >
-                      ×
+                      ↗
                     </button>
-                  )}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="room-delete-btn"
+                        onClick={(e) => handleDeleteRoom(e, room.id)}
+                        title="Delete room"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -2127,6 +2085,14 @@ function App() {
                 <div className="chat-header-top">
                   <h2>{activeRoom.name}</h2>
                   <span className="chat-tag">Straight · 1-leg</span>
+                  <button
+                    type="button"
+                    className="chat-share-btn"
+                    onClick={() => openShareRoom(activeRoom)}
+                    title="Share room"
+                  >
+                    ↗ Share
+                  </button>
                 </div>
                 <p>
                   Game: <span className="highlight">{activeRoom.game}</span> · Odds:{" "}
@@ -4041,6 +4007,17 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Share Modal */}
+      <ShareModal
+        isOpen={shareModalOpen}
+        onClose={closeShareModal}
+        type={shareModalType}
+        room={shareModalRoom}
+        post={shareModalPost}
+        currentUser={user}
+        userProfile={userProfile}
+      />
     </div>
   );
 

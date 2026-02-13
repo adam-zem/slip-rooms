@@ -227,6 +227,7 @@ export async function getFriends(userId) {
         username: friendData.username || "Unknown",
         avatarEmoji: friendData.avatarEmoji || "🔥",
         avatarColor: friendData.avatarColor || "green",
+        profilePicture: friendData.profilePicture || null,
         xp: friendData.xp || 0,
         level: friendData.level || 1,
         bio: friendData.bio || "",

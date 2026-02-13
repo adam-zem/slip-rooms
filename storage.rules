@@ -2,24 +2,53 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     // Profile pictures - users can only upload their own
+    // Supports both old path (profilePics) and new path (profilePictures)
     match /profilePics/{userId} {
-      // Anyone authenticated can read profile pictures
       allow read: if request.auth != null;
-      // Users can only upload their own profile picture
       allow write: if request.auth != null
         && request.auth.uid == userId
-        && request.resource.size < 5 * 1024 * 1024 // Max 5MB
-        && request.resource.contentType.matches('image/.*'); // Only images
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
     }
 
-    // Room chat images - any authenticated user can upload
-    match /roomImages/{roomId}/{imageFile} {
-      // Anyone authenticated can read room images
+    match /profilePictures/{userId} {
       allow read: if request.auth != null;
-      // Any authenticated user can upload images to rooms
       allow write: if request.auth != null
-        && request.resource.size < 2 * 1024 * 1024 // Max 2MB
-        && request.resource.contentType.matches('image/.*'); // Only images
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Room chat images - supports both old and new paths
+    match /roomImages/{roomId}/{imageFile} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /chat/{roomId}/{imageFile} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // DM chat images
+    match /dm/{conversationId}/{imageFile} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Post images - path is posts/{userId}/{imageFile}
+    match /posts/{userId}/{imageFile} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
     }
   }
 }
