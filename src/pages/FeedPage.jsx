@@ -16,7 +16,14 @@ import {
   subscribeToComments,
   addComment,
   createPost,
+  subscribeToReplies,
+  getPost,
+  searchUsersByUsername,
 } from "../services/postsService";
+import {
+  createReplyNotification,
+  createMentionNotifications,
+} from "../services/notificationService";
 import ShareModal from "../components/ShareModal";
 import "./FeedPage.css";
 
@@ -44,6 +51,62 @@ function formatTimeAgo(date) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// Render text with @mentions highlighted in green and clickable
+function RenderTextWithMentions({ text, onUserClick }) {
+  if (!text) return null;
+
+  const mentionRegex = /@([A-Za-z0-9_]+)/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = mentionRegex.exec(text)) !== null) {
+    // Add text before the mention
+    if (match.index > lastIndex) {
+      parts.push(
+        <span key={`text-${lastIndex}`}>
+          {text.substring(lastIndex, match.index)}
+        </span>
+      );
+    }
+
+    // Add the mention as a clickable green link
+    const username = match[1];
+    parts.push(
+      <button
+        key={`mention-${match.index}`}
+        className="mention-link"
+        onClick={(e) => {
+          e.stopPropagation();
+          // For now, navigate using username - ideally look up user ID
+          if (onUserClick) onUserClick(username);
+        }}
+      >
+        @{username}
+      </button>
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(
+      <span key={`text-${lastIndex}`}>
+        {text.substring(lastIndex)}
+      </span>
+    );
+  }
+
+  return <>{parts}</>;
+}
+
+// Format count with 99+ for large numbers
+function formatCount(count) {
+  if (count > 99) return "99+";
+  return count.toString();
+}
+
 // Post Card Component (Twitter style)
 function PostCard({
   post,
@@ -54,16 +117,40 @@ function PostCard({
   onDelete,
   onShare,
   onUserClick,
+  onPostPress,
+  showReplyContext = true,
 }) {
-  const hasThumbsUp = post.thumbsUp.includes(currentUserId);
-  const hasThumbsDown = post.thumbsDown.includes(currentUserId);
+  const hasThumbsUp = (post.thumbsUp || []).includes(currentUserId);
+  const hasThumbsDown = (post.thumbsDown || []).includes(currentUserId);
   const isOwner = post.userId === currentUserId;
   const avatarColor = COLOR_MAP[post.userAvatarColor || "green"] || COLOR_MAP.green;
+  const replyCount = post.commentsCount || post.metrics?.repliesCount || 0;
+
+  const handlePostClick = (e) => {
+    // Don't trigger if clicking on buttons or links
+    if (e.target.closest('button') || e.target.closest('a')) return;
+    if (onPostPress) {
+      onPostPress();
+    } else if (onComment) {
+      onComment();
+    }
+  };
 
   return (
-    <article className="x-post">
+    <article className="x-post" onClick={handlePostClick} style={{ cursor: "pointer" }}>
+      {/* Reply context */}
+      {showReplyContext && post.replyToPostId && post.replyToUsername && (
+        <div className="x-reply-context">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M12 3.786L3.786 12 12 20.214l1.414-1.414L7.414 13H21v-2H7.414l5.914-5.914L12 3.786z"/>
+          </svg>
+          <span>
+            Replying to <button className="reply-to-link" onClick={(e) => { e.stopPropagation(); onUserClick && onUserClick(post.replyToAuthorId); }}>@{post.replyToUsername}</button>
+          </span>
+        </div>
+      )}
       <div className="x-post-avatar-col">
-        <button className="x-post-avatar-btn" onClick={() => onUserClick(post.userId)}>
+        <button className="x-post-avatar-btn" onClick={(e) => { e.stopPropagation(); onUserClick(post.userId); }}>
           {post.userProfilePicture ? (
             <img src={post.userProfilePicture} alt="" className="x-post-avatar" />
           ) : (
@@ -78,14 +165,14 @@ function PostCard({
       </div>
       <div className="x-post-content">
         <div className="x-post-header">
-          <button className="x-post-user-link" onClick={() => onUserClick(post.userId)}>
+          <button className="x-post-user-link" onClick={(e) => { e.stopPropagation(); onUserClick(post.userId); }}>
             <span className="x-post-name">{post.username}</span>
             <span className="x-post-handle">@{post.username?.toLowerCase()}</span>
             <span className="x-post-dot">·</span>
             <span className="x-post-time">{formatTimeAgo(post.createdAt)}</span>
           </button>
           {isOwner && (
-            <button className="x-post-menu" onClick={onDelete}>
+            <button className="x-post-menu" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
               <svg viewBox="0 0 24 24" width="18" height="18">
                 <circle cx="5" cy="12" r="2" fill="currentColor"/>
                 <circle cx="12" cy="12" r="2" fill="currentColor"/>
@@ -95,7 +182,11 @@ function PostCard({
           )}
         </div>
 
-        {post.text && <p className="x-post-text">{post.text}</p>}
+        {post.text && (
+          <p className="x-post-text">
+            <RenderTextWithMentions text={post.text} onUserClick={onUserClick} />
+          </p>
+        )}
 
         {post.images && post.images.length > 0 && (
           <div className={`x-post-images ${post.images.length === 1 ? "single" : "grid"}`}>
@@ -106,25 +197,25 @@ function PostCard({
         )}
 
         <div className="x-post-actions">
-          <button className="x-action x-action-comment" onClick={onComment}>
+          <button className="x-action x-action-comment" onClick={(e) => { e.stopPropagation(); onComment(); }}>
             <svg viewBox="0 0 24 24" width="18" height="18">
               <path fill="currentColor" d="M1.751 10c0-4.42 3.584-8 8.005-8h4.366c4.49 0 8.129 3.64 8.129 8.13 0 2.96-1.607 5.68-4.196 7.11l-8.054 4.46v-3.69h-.067c-4.49.1-8.183-3.51-8.183-8.01zm8.005-6c-3.317 0-6.005 2.69-6.005 6 0 3.37 2.77 6.08 6.138 6.01l.351-.01h1.761v2.3l5.087-2.81c1.951-1.08 3.163-3.13 3.163-5.36 0-3.39-2.744-6.13-6.129-6.13H9.756z"/>
             </svg>
-            {post.commentsCount > 0 && <span>{post.commentsCount}</span>}
+            {replyCount > 0 && <span>{formatCount(replyCount)}</span>}
           </button>
-          <button className={`x-action x-action-like ${hasThumbsUp ? "active" : ""}`} onClick={onThumbsUp}>
+          <button className={`x-action x-action-like ${hasThumbsUp ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); onThumbsUp(); }}>
             <svg viewBox="0 0 24 24" width="18" height="18">
               <path fill="currentColor" d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"/>
             </svg>
-            {post.thumbsUpCount > 0 && <span>{post.thumbsUpCount}</span>}
+            {post.thumbsUpCount > 0 && <span>{formatCount(post.thumbsUpCount)}</span>}
           </button>
-          <button className={`x-action x-action-dislike ${hasThumbsDown ? "active" : ""}`} onClick={onThumbsDown}>
+          <button className={`x-action x-action-dislike ${hasThumbsDown ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); onThumbsDown(); }}>
             <svg viewBox="0 0 24 24" width="18" height="18" style={{ transform: "rotate(180deg)" }}>
               <path fill="currentColor" d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"/>
             </svg>
-            {post.thumbsDownCount > 0 && <span>{post.thumbsDownCount}</span>}
+            {post.thumbsDownCount > 0 && <span>{formatCount(post.thumbsDownCount)}</span>}
           </button>
-          <button className="x-action x-action-share" onClick={onShare}>
+          <button className="x-action x-action-share" onClick={(e) => { e.stopPropagation(); onShare(); }}>
             <svg viewBox="0 0 24 24" width="18" height="18">
               <path fill="currentColor" d="M12 2.59l5.7 5.7-1.41 1.42L13 6.41V16h-2V6.41l-3.3 3.3-1.41-1.42L12 2.59zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21 3 19.88 3 18.5V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5L19 15h2z"/>
             </svg>
@@ -135,110 +226,302 @@ function PostCard({
   );
 }
 
-// Comments Modal
-function CommentsModal({ post, currentUser, userProfile, onClose }) {
-  const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState("");
+// Thread Modal - Shows original post + replies with reply composer
+function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onThumbsUp, onThumbsDown }) {
+  const navigate = useNavigate();
+  const [replies, setReplies] = useState([]);
+  const [replyText, setReplyText] = useState("");
   const [sending, setSending] = useState(false);
-  const commentsEndRef = useRef(null);
+  const [mentionSuggestions, setMentionSuggestions] = useState([]);
+  const [showMentions, setShowMentions] = useState(false);
+  const repliesEndRef = useRef(null);
 
   useEffect(() => {
     if (!post) return;
-    const unsubscribe = subscribeToComments(post.id, setComments);
+    const unsubscribe = subscribeToReplies(post.id, setReplies);
     return () => unsubscribe();
   }, [post?.id]);
 
   useEffect(() => {
-    commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [comments]);
+    repliesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [replies]);
+
+  // Handle @ mention autocomplete
+  const handleTextChange = async (e) => {
+    const text = e.target.value;
+    setReplyText(text);
+
+    // Check if we're typing a mention
+    const lastAtIndex = text.lastIndexOf("@");
+    if (lastAtIndex !== -1) {
+      const afterAt = text.substring(lastAtIndex + 1);
+      if (!afterAt.includes(" ") && afterAt.length > 0) {
+        setShowMentions(true);
+        try {
+          const users = await searchUsersByUsername(afterAt, 5);
+          setMentionSuggestions(users);
+        } catch (error) {
+          setMentionSuggestions([]);
+        }
+      } else if (afterAt.length === 0) {
+        setShowMentions(true);
+        setMentionSuggestions([]);
+      } else {
+        setShowMentions(false);
+      }
+    } else {
+      setShowMentions(false);
+    }
+  };
+
+  const insertMention = (username) => {
+    const lastAtIndex = replyText.lastIndexOf("@");
+    if (lastAtIndex !== -1) {
+      const newText = replyText.substring(0, lastAtIndex) + "@" + username + " ";
+      setReplyText(newText);
+    }
+    setShowMentions(false);
+    setMentionSuggestions([]);
+  };
 
   const handleSend = async () => {
-    if (!newComment.trim() || !post || sending) return;
+    if (!replyText.trim() || !post || sending) return;
     setSending(true);
     try {
-      await addComment(post.id, currentUser.uid, {
+      const userData = {
         username: userProfile?.username || "User",
         avatarEmoji: userProfile?.avatarEmoji || "🔥",
         avatarColor: userProfile?.avatarColor || "green",
         profilePicture: userProfile?.profilePicture || null,
-      }, newComment);
-      setNewComment("");
+      };
+
+      // Create the reply as a post with replyToPostId
+      const newReply = await createPost(
+        currentUser.uid,
+        userData,
+        replyText.trim(),
+        [], // no images for now
+        post.id // replyToPostId
+      );
+
+      // Create notification for the post author
+      if (post.authorId && post.authorId !== currentUser.uid) {
+        try {
+          await createReplyNotification(
+            post.authorId,
+            currentUser.uid,
+            userData,
+            newReply.id,
+            replyText.trim()
+          );
+        } catch (notifError) {
+          console.log("Could not create reply notification:", notifError);
+        }
+      }
+
+      // Create mention notifications
+      if (newReply.mentionedUserIds && newReply.mentionedUserIds.length > 0) {
+        try {
+          await createMentionNotifications(
+            newReply.mentionedUserIds,
+            currentUser.uid,
+            userData,
+            newReply.id,
+            replyText.trim()
+          );
+        } catch (notifError) {
+          console.log("Could not create mention notifications:", notifError);
+        }
+      }
+
+      setReplyText("");
     } catch (error) {
-      console.error("Error posting comment:", error);
+      console.error("Error posting reply:", error);
     } finally {
       setSending(false);
     }
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !showMentions) {
       e.preventDefault();
       handleSend();
     }
   };
 
+  const postAvatarColor = COLOR_MAP[post?.userAvatarColor || "green"] || COLOR_MAP.green;
+
   return (
     <div className="x-modal-overlay" onClick={onClose}>
-      <div className="x-comments-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="x-comments-header">
+      <div className="x-thread-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="x-thread-header">
           <button className="x-modal-close" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="20" height="20">
               <path fill="currentColor" d="M10.59 12L4.54 5.96l1.42-1.42L12 10.59l6.04-6.05 1.42 1.42L13.41 12l6.05 6.04-1.42 1.42L12 13.41l-6.04 6.05-1.42-1.42L10.59 12z"/>
             </svg>
           </button>
-          <h2>Replies</h2>
+          <h2>Thread</h2>
         </div>
-        <div className="x-comments-list">
-          {comments.length === 0 ? (
-            <div className="x-comments-empty">
-              <p>No replies yet</p>
-              <p className="sub">Be the first to reply!</p>
-            </div>
-          ) : (
-            comments.map((comment) => {
-              const color = COLOR_MAP[comment.userAvatarColor || "green"] || COLOR_MAP.green;
-              return (
-                <div key={comment.id} className="x-comment">
-                  {comment.userProfilePicture ? (
-                    <img src={comment.userProfilePicture} alt="" className="x-comment-avatar" />
+
+        <div className="x-thread-content">
+          {/* Original Post */}
+          {post && (
+            <div className="x-original-post">
+              <div className="x-post-header">
+                <button className="x-post-avatar-btn" onClick={() => onUserClick && onUserClick(post.userId)}>
+                  {post.userProfilePicture ? (
+                    <img src={post.userProfilePicture} alt="" className="x-post-avatar" />
                   ) : (
-                    <div className="x-comment-avatar-placeholder" style={{ backgroundColor: color + "30" }}>
-                      {comment.userAvatar}
+                    <div className="x-post-avatar-placeholder" style={{ backgroundColor: postAvatarColor + "30", borderColor: postAvatarColor }}>
+                      {post.userAvatar}
                     </div>
                   )}
-                  <div className="x-comment-content">
-                    <div className="x-comment-header">
-                      <span className="x-comment-name">{comment.username}</span>
-                      <span className="x-comment-time">· {formatTimeAgo(comment.createdAt)}</span>
-                    </div>
-                    <p className="x-comment-text">{comment.text}</p>
-                  </div>
+                </button>
+                <div className="x-post-user-info">
+                  <span className="x-post-name">{post.username}</span>
+                  <span className="x-post-handle">@{post.username?.toLowerCase()}</span>
                 </div>
-              );
-            })
+              </div>
+              <div className="x-original-post-text">
+                <RenderTextWithMentions text={post.text} onUserClick={onUserClick} />
+              </div>
+              {post.images && post.images.length > 0 && (
+                <div className="x-post-images single">
+                  {post.images.map((img, idx) => (
+                    <img key={idx} src={img} alt="" className="x-post-image" />
+                  ))}
+                </div>
+              )}
+              <div className="x-original-post-time">
+                {post.createdAt?.toLocaleString?.() || formatTimeAgo(post.createdAt)}
+              </div>
+              <div className="x-original-post-stats">
+                <span>{post.commentsCount || 0} Replies</span>
+                <span>{post.thumbsUpCount || 0} Likes</span>
+              </div>
+            </div>
           )}
-          <div ref={commentsEndRef} />
-        </div>
-        <div className="x-comment-composer">
-          <textarea
-            value={newComment}
-            onChange={(e) => setNewComment(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Post your reply"
-            maxLength={500}
-          />
-          <button
-            className="x-reply-btn"
-            onClick={handleSend}
-            disabled={!newComment.trim() || sending}
-          >
-            Reply
-          </button>
+
+          {/* Reply Composer */}
+          <div className="x-reply-composer">
+            <div className="x-replying-to">
+              Replying to <span className="mention-link">@{post?.username}</span>
+            </div>
+            <div className="x-reply-input-row">
+              {userProfile?.profilePicture ? (
+                <img src={userProfile.profilePicture} alt="" className="x-composer-avatar" />
+              ) : (
+                <div className="x-composer-avatar-placeholder" style={{ backgroundColor: (COLOR_MAP[userProfile?.avatarColor] || COLOR_MAP.green) + "30" }}>
+                  {userProfile?.avatarEmoji || "🔥"}
+                </div>
+              )}
+              <div className="x-reply-input-wrapper">
+                <textarea
+                  value={replyText}
+                  onChange={handleTextChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Post your reply..."
+                  maxLength={500}
+                />
+                {/* Mention Suggestions */}
+                {showMentions && mentionSuggestions.length > 0 && (
+                  <div className="x-mention-suggestions">
+                    {mentionSuggestions.map((user) => (
+                      <button
+                        key={user.id}
+                        className="x-mention-item"
+                        onClick={() => insertMention(user.username)}
+                      >
+                        {user.profilePicture ? (
+                          <img src={user.profilePicture} alt="" className="x-mention-avatar" />
+                        ) : (
+                          <div className="x-mention-avatar-placeholder" style={{ backgroundColor: (COLOR_MAP[user.avatarColor] || COLOR_MAP.green) + "30" }}>
+                            {user.avatarEmoji}
+                          </div>
+                        )}
+                        <span className="x-mention-username">@{user.username}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                className="x-reply-btn"
+                onClick={handleSend}
+                disabled={!replyText.trim() || sending}
+              >
+                Reply
+              </button>
+            </div>
+          </div>
+
+          {/* Replies */}
+          <div className="x-replies-section">
+            {replies.length === 0 ? (
+              <div className="x-comments-empty">
+                <p>No replies yet</p>
+                <p className="sub">Be the first to reply!</p>
+              </div>
+            ) : (
+              replies.map((reply) => {
+                const color = COLOR_MAP[reply.userAvatarColor || "green"] || COLOR_MAP.green;
+                const hasThumbsUp = (reply.thumbsUp || []).includes(currentUser?.uid);
+                const hasThumbsDown = (reply.thumbsDown || []).includes(currentUser?.uid);
+                return (
+                  <div key={reply.id} className="x-reply-item">
+                    <div className="x-reply-connector"></div>
+                    <button className="x-reply-avatar-btn" onClick={() => onUserClick && onUserClick(reply.userId)}>
+                      {reply.userProfilePicture ? (
+                        <img src={reply.userProfilePicture} alt="" className="x-reply-avatar" />
+                      ) : (
+                        <div className="x-reply-avatar-placeholder" style={{ backgroundColor: color + "30" }}>
+                          {reply.userAvatar}
+                        </div>
+                      )}
+                    </button>
+                    <div className="x-reply-content">
+                      <div className="x-reply-header">
+                        <span className="x-reply-name">{reply.username}</span>
+                        <span className="x-reply-handle">@{reply.username?.toLowerCase()}</span>
+                        <span className="x-reply-time">· {formatTimeAgo(reply.createdAt)}</span>
+                      </div>
+                      <p className="x-reply-text">
+                        <RenderTextWithMentions text={reply.text} onUserClick={onUserClick} />
+                      </p>
+                      <div className="x-reply-actions">
+                        <button
+                          className={`x-reply-action ${hasThumbsUp ? "active-like" : ""}`}
+                          onClick={() => onThumbsUp && onThumbsUp(reply)}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16">
+                            <path fill="currentColor" d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91z"/>
+                          </svg>
+                          {reply.thumbsUpCount > 0 && <span>{reply.thumbsUpCount}</span>}
+                        </button>
+                        <button
+                          className={`x-reply-action ${hasThumbsDown ? "active-dislike" : ""}`}
+                          onClick={() => onThumbsDown && onThumbsDown(reply)}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" style={{ transform: "rotate(180deg)" }}>
+                            <path fill="currentColor" d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91z"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div ref={repliesEndRef} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+// Legacy alias
+const CommentsModal = ThreadModal;
 
 // Post Composer Component
 function PostComposer({ user, userProfile, onPost }) {
@@ -383,8 +666,8 @@ export default function FeedPage() {
 
   const handleThumbsUp = async (post) => {
     if (!user?.uid) return;
-    const hasThumbsUp = post.thumbsUp.includes(user.uid);
-    const hasThumbsDown = post.thumbsDown.includes(user.uid);
+    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
+    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
 
     updatePostInFeeds(post.id, (p) => {
       if (hasThumbsUp) {
@@ -418,8 +701,8 @@ export default function FeedPage() {
 
   const handleThumbsDown = async (post) => {
     if (!user?.uid) return;
-    const hasThumbsUp = post.thumbsUp.includes(user.uid);
-    const hasThumbsDown = post.thumbsDown.includes(user.uid);
+    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
+    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
 
     updatePostInFeeds(post.id, (p) => {
       if (hasThumbsDown) {
@@ -471,15 +754,49 @@ export default function FeedPage() {
     setShareModalOpen(true);
   };
 
+  // Open thread modal - if it's a reply, show the parent post instead
+  const openComments = async (post) => {
+    if (post.replyToPostId) {
+      try {
+        const parentPost = await getPost(post.replyToPostId);
+        if (parentPost) {
+          setCommentsPost(parentPost);
+          return;
+        }
+      } catch (error) {
+        console.log("Could not fetch parent post:", error);
+      }
+    }
+    setCommentsPost(post);
+  };
+
   const handleCreatePost = async (text) => {
     if (!user?.uid || !text.trim()) return;
     try {
-      await createPost(user.uid, {
+      const userData = {
         username: userProfile?.username || "User",
         avatarEmoji: userProfile?.avatarEmoji || "🔥",
         avatarColor: userProfile?.avatarColor || "green",
         profilePicture: userProfile?.profilePicture || null,
-      }, text, []);
+      };
+
+      const newPost = await createPost(user.uid, userData, text, []);
+
+      // Create mention notifications
+      if (newPost.mentionedUserIds && newPost.mentionedUserIds.length > 0) {
+        try {
+          await createMentionNotifications(
+            newPost.mentionedUserIds,
+            user.uid,
+            userData,
+            newPost.id,
+            text.trim()
+          );
+        } catch (notifError) {
+          console.log("Could not create mention notifications:", notifError);
+        }
+      }
+
       handleRefresh();
     } catch (error) {
       console.error("Error creating post:", error);
@@ -602,7 +919,7 @@ export default function FeedPage() {
                 currentUserId={user?.uid || ""}
                 onThumbsUp={() => handleThumbsUp(post)}
                 onThumbsDown={() => handleThumbsDown(post)}
-                onComment={() => setCommentsPost(post)}
+                onComment={() => openComments(post)}
                 onDelete={() => handleDeletePost(post)}
                 onShare={() => handleShare(post)}
                 onUserClick={handleUserClick}
@@ -612,13 +929,19 @@ export default function FeedPage() {
         </div>
       </main>
 
-      {/* Comments Modal */}
+      {/* Thread/Reply Modal */}
       {commentsPost && (
-        <CommentsModal
+        <ThreadModal
           post={commentsPost}
           currentUser={user}
           userProfile={userProfile}
           onClose={() => setCommentsPost(null)}
+          onUserClick={(userId) => {
+            setCommentsPost(null);
+            navigate(`/profile/${userId}`);
+          }}
+          onThumbsUp={handleThumbsUp}
+          onThumbsDown={handleThumbsDown}
         />
       )}
 

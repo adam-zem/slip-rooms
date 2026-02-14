@@ -489,6 +489,43 @@
   cursor: not-allowed;
 }
 
+/* Profile Tabs */
+.profile-tabs {
+  display: flex;
+  width: 100%;
+  border-bottom: 1px solid #1a1a1a;
+  margin-bottom: 16px;
+}
+
+.profile-tab {
+  flex: 1;
+  padding: 14px 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #666;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profile-tab:hover {
+  color: #888;
+}
+
+.profile-tab.active {
+  color: var(--matrix-green);
+  border-bottom-color: var(--matrix-green);
+}
+
+.tab-loading {
+  display: flex;
+  justify-content: center;
+  padding: 60px 0;
+}
+
 /* Wall Section */
 .wall-section {
   width: 100%;

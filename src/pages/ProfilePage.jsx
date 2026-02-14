@@ -12,6 +12,10 @@ import { deleteUserAccount } from "../services/accountService";
 import {
   createPost,
   subscribeToUserPosts,
+  getUserOriginalPosts,
+  getUserReplies,
+  getUserMediaPosts,
+  getUserLikedPosts,
   thumbsUpPost,
   removeThumbsUp,
   thumbsDownPost,
@@ -66,8 +70,8 @@ function PostCard({
   onShare,
   onUserClick,
 }) {
-  const hasThumbsUp = post.thumbsUp.includes(currentUserId);
-  const hasThumbsDown = post.thumbsDown.includes(currentUserId);
+  const hasThumbsUp = (post.thumbsUp || []).includes(currentUserId);
+  const hasThumbsDown = (post.thumbsDown || []).includes(currentUserId);
   const isOwner = post.userId === currentUserId;
   const avatarColor = COLOR_MAP[post.userAvatarColor || "green"] || COLOR_MAP.green;
 
@@ -246,6 +250,10 @@ function ProfilePage() {
   const [sharePost, setSharePost] = useState(null);
   const postImageRef = useRef(null);
 
+  // Profile tabs
+  const [activeTab, setActiveTab] = useState('posts');
+  const [tabLoading, setTabLoading] = useState(false);
+
   // Friend requests (only for own profile)
   const [friendRequests, setFriendRequests] = useState([]);
 
@@ -298,12 +306,40 @@ function ProfilePage() {
     else setLoading(false);
   }, [targetUserId, user?.uid, isOwnProfile, user, userProfile]);
 
-  // Subscribe to posts
+  // Load posts based on active tab
   useEffect(() => {
     if (!targetUserId) return;
-    const unsubscribe = subscribeToUserPosts(targetUserId, setPosts);
-    return () => unsubscribe();
-  }, [targetUserId]);
+
+    const loadTabData = async () => {
+      setTabLoading(true);
+      try {
+        let data = [];
+        switch (activeTab) {
+          case 'posts':
+            data = await getUserOriginalPosts(targetUserId);
+            break;
+          case 'replies':
+            data = await getUserReplies(targetUserId);
+            break;
+          case 'media':
+            data = await getUserMediaPosts(targetUserId);
+            break;
+          case 'likes':
+            data = await getUserLikedPosts(targetUserId);
+            break;
+          default:
+            data = await getUserOriginalPosts(targetUserId);
+        }
+        setPosts(data);
+      } catch (error) {
+        console.error('Error loading tab data:', error);
+      } finally {
+        setTabLoading(false);
+      }
+    };
+
+    loadTabData();
+  }, [targetUserId, activeTab]);
 
   // Check friendship
   useEffect(() => {
@@ -497,8 +533,8 @@ function ProfilePage() {
 
   const handleThumbsUp = async (post) => {
     if (!user?.uid) return;
-    const hasThumbsUp = post.thumbsUp.includes(user.uid);
-    const hasThumbsDown = post.thumbsDown.includes(user.uid);
+    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
+    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
 
     // Optimistic update
     setPosts((prev) => prev.map((p) => {
@@ -529,8 +565,8 @@ function ProfilePage() {
 
   const handleThumbsDown = async (post) => {
     if (!user?.uid) return;
-    const hasThumbsUp = post.thumbsUp.includes(user.uid);
-    const hasThumbsDown = post.thumbsDown.includes(user.uid);
+    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
+    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
 
     // Optimistic update
     setPosts((prev) => prev.map((p) => {
@@ -859,15 +895,58 @@ function ProfilePage() {
           </div>
         )}
 
+        {/* Profile Tabs */}
+        {!isPrivate && (
+          <div className="profile-tabs">
+            <button
+              className={`profile-tab ${activeTab === 'posts' ? 'active' : ''}`}
+              onClick={() => setActiveTab('posts')}
+            >
+              POSTS
+            </button>
+            <button
+              className={`profile-tab ${activeTab === 'replies' ? 'active' : ''}`}
+              onClick={() => setActiveTab('replies')}
+            >
+              REPLIES
+            </button>
+            <button
+              className={`profile-tab ${activeTab === 'media' ? 'active' : ''}`}
+              onClick={() => setActiveTab('media')}
+            >
+              MEDIA
+            </button>
+            <button
+              className={`profile-tab ${activeTab === 'likes' ? 'active' : ''}`}
+              onClick={() => setActiveTab('likes')}
+            >
+              LIKES
+            </button>
+          </div>
+        )}
+
         {/* Wall / Posts Section */}
         {!isPrivate && (
           <div className="wall-section">
-            <h2 className="wall-title">{isOwnProfile ? "YOUR WALL" : `${profile.username.toUpperCase()}'S WALL`}</h2>
-            {posts.length === 0 ? (
+            {tabLoading ? (
+              <div className="tab-loading">
+                <div className="spinner" />
+              </div>
+            ) : posts.length === 0 ? (
               <div className="wall-empty">
                 <span>📝</span>
-                <p>No posts yet</p>
-                {isOwnProfile && <p className="sub">Share what's on your mind!</p>}
+                <p>
+                  {activeTab === 'posts' && "No posts yet"}
+                  {activeTab === 'replies' && "No replies yet"}
+                  {activeTab === 'media' && "No media posts yet"}
+                  {activeTab === 'likes' && "No liked posts yet"}
+                </p>
+                <p className="sub">
+                  {activeTab === 'posts' && isOwnProfile && "Share what's on your mind!"}
+                  {activeTab === 'replies' && "Reply to posts to see them here"}
+                  {activeTab === 'media' && "Posts with images will appear here"}
+                  {activeTab === 'likes' && "Like posts to see them here"}
+                </p>
               </div>
             ) : (
               posts.map((post) => (
