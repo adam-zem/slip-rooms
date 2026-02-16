@@ -18,6 +18,8 @@ import {
   serverTimestamp,
   increment,
   writeBatch,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../firebase";
@@ -819,103 +821,131 @@ export function subscribeToReplies(postId, callback, replyLimit = 50) {
 }
 
 // =============================================================================
-// LIKES
+// LIKES - Updates both likes collection AND thumbsUp array for mobile compatibility
 // =============================================================================
 
 export async function likePost(postId, userId) {
-  const likeId = `${userId}_${postId}`;
-  const likeRef = doc(db, "likes", likeId);
+  console.log("[PostsService] likePost called:", { postId, userId });
   const postRef = doc(db, "posts", postId);
 
-  // Check if user has disliked
-  const dislikeId = `${userId}_${postId}`;
-  const dislikeRef = doc(db, "dislikes", dislikeId);
-  const dislikeDoc = await getDoc(dislikeRef);
+  try {
+    const postDoc = await getDoc(postRef);
+    if (!postDoc.exists()) {
+      throw new Error("Post not found");
+    }
 
-  const batch = writeBatch(db);
+    const data = postDoc.data();
+    const thumbsUp = data.thumbsUp || [];
+    const thumbsDown = data.thumbsDown || [];
+    const wasDisliked = thumbsDown.includes(userId);
 
-  if (dislikeDoc.exists()) {
-    batch.delete(dislikeRef);
-    batch.update(postRef, {
-      "metrics.dislikesCount": increment(-1),
-    });
+    // Already liked? Do nothing
+    if (thumbsUp.includes(userId)) {
+      console.log("[PostsService] User already liked this post");
+      return;
+    }
+
+    // Use atomic arrayUnion to prevent duplicates
+    const updates = {
+      thumbsUp: arrayUnion(userId),
+      thumbsUpCount: increment(1),
+      "metrics.likesCount": increment(1),
+    };
+
+    // Remove from thumbsDown if present
+    if (wasDisliked) {
+      updates.thumbsDown = arrayRemove(userId);
+      updates.thumbsDownCount = increment(-1);
+      updates["metrics.dislikesCount"] = increment(-1);
+    }
+
+    await updateDoc(postRef, updates);
+    console.log("[PostsService] Like successful");
+  } catch (error) {
+    console.error("[PostsService] Error in likePost:", error);
+    throw error;
   }
-
-  batch.set(likeRef, {
-    userId,
-    postId,
-    createdAt: serverTimestamp(),
-  });
-
-  batch.update(postRef, {
-    "metrics.likesCount": increment(1),
-  });
-
-  await batch.commit();
 }
 
 export async function unlikePost(postId, userId) {
-  const likeId = `${userId}_${postId}`;
-  const likeRef = doc(db, "likes", likeId);
+  console.log("[PostsService] unlikePost called:", { postId, userId });
   const postRef = doc(db, "posts", postId);
 
-  const batch = writeBatch(db);
-  batch.delete(likeRef);
-  batch.update(postRef, {
-    "metrics.likesCount": increment(-1),
-  });
-
-  await batch.commit();
+  try {
+    await updateDoc(postRef, {
+      thumbsUp: arrayRemove(userId),
+      thumbsUpCount: increment(-1),
+      "metrics.likesCount": increment(-1),
+    });
+    console.log("[PostsService] Unlike successful");
+  } catch (error) {
+    console.error("[PostsService] Error in unlikePost:", error);
+    throw error;
+  }
 }
 
 // =============================================================================
-// DISLIKES
+// DISLIKES - Updates both dislikes collection AND thumbsDown array for mobile compatibility
 // =============================================================================
 
 export async function dislikePost(postId, userId) {
-  const dislikeId = `${userId}_${postId}`;
-  const dislikeRef = doc(db, "dislikes", dislikeId);
+  console.log("[PostsService] dislikePost called:", { postId, userId });
   const postRef = doc(db, "posts", postId);
 
-  // Check if user has liked
-  const likeId = `${userId}_${postId}`;
-  const likeRef = doc(db, "likes", likeId);
-  const likeDoc = await getDoc(likeRef);
+  try {
+    const postDoc = await getDoc(postRef);
+    if (!postDoc.exists()) {
+      throw new Error("Post not found");
+    }
 
-  const batch = writeBatch(db);
+    const data = postDoc.data();
+    const thumbsUp = data.thumbsUp || [];
+    const thumbsDown = data.thumbsDown || [];
+    const wasLiked = thumbsUp.includes(userId);
 
-  if (likeDoc.exists()) {
-    batch.delete(likeRef);
-    batch.update(postRef, {
-      "metrics.likesCount": increment(-1),
-    });
+    // Already disliked? Do nothing
+    if (thumbsDown.includes(userId)) {
+      console.log("[PostsService] User already disliked this post");
+      return;
+    }
+
+    // Use atomic arrayUnion to prevent duplicates
+    const updates = {
+      thumbsDown: arrayUnion(userId),
+      thumbsDownCount: increment(1),
+      "metrics.dislikesCount": increment(1),
+    };
+
+    // Remove from thumbsUp if present
+    if (wasLiked) {
+      updates.thumbsUp = arrayRemove(userId);
+      updates.thumbsUpCount = increment(-1);
+      updates["metrics.likesCount"] = increment(-1);
+    }
+
+    await updateDoc(postRef, updates);
+    console.log("[PostsService] Dislike successful");
+  } catch (error) {
+    console.error("[PostsService] Error in dislikePost:", error);
+    throw error;
   }
-
-  batch.set(dislikeRef, {
-    userId,
-    postId,
-    createdAt: serverTimestamp(),
-  });
-
-  batch.update(postRef, {
-    "metrics.dislikesCount": increment(1),
-  });
-
-  await batch.commit();
 }
 
 export async function undislikePost(postId, userId) {
-  const dislikeId = `${userId}_${postId}`;
-  const dislikeRef = doc(db, "dislikes", dislikeId);
+  console.log("[PostsService] undislikePost called:", { postId, userId });
   const postRef = doc(db, "posts", postId);
 
-  const batch = writeBatch(db);
-  batch.delete(dislikeRef);
-  batch.update(postRef, {
-    "metrics.dislikesCount": increment(-1),
-  });
-
-  await batch.commit();
+  try {
+    await updateDoc(postRef, {
+      thumbsDown: arrayRemove(userId),
+      thumbsDownCount: increment(-1),
+      "metrics.dislikesCount": increment(-1),
+    });
+    console.log("[PostsService] Undislike successful");
+  } catch (error) {
+    console.error("[PostsService] Error in undislikePost:", error);
+    throw error;
+  }
 }
 
 // =============================================================================
