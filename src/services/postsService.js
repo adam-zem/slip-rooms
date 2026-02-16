@@ -30,10 +30,15 @@ import { db, storage } from "../firebase";
 
 function mapDocToPost(docSnap) {
   const data = docSnap.data();
+  const authorUsername = data.authorUsername || data.username || "";
+  const authorDisplayName = data.authorDisplayName || data.displayName || authorUsername;
+
   return {
     id: docSnap.id,
     authorId: data.authorId || data.userId || "",
-    authorUsername: data.authorUsername || data.username || "",
+    authorUsername: authorUsername,
+    authorDisplayName: authorDisplayName,
+    displayName: authorDisplayName, // alias for convenience
     authorAvatar: data.authorAvatar || data.userAvatar || "🔥",
     authorAvatarColor: data.authorAvatarColor || data.userAvatarColor || "green",
     authorProfilePicture: data.authorProfilePicture || data.userProfilePicture || null,
@@ -63,7 +68,7 @@ function mapDocToPost(docSnap) {
     repostsCount: data.metrics?.repostsCount ?? 0,
     images: data.media || data.images || [],
     userId: data.authorId || data.userId || "",
-    username: data.authorUsername || data.username || "",
+    username: authorUsername,
     userAvatar: data.authorAvatar || data.userAvatar || "🔥",
     userAvatarColor: data.authorAvatarColor || data.userAvatarColor || "green",
     userProfilePicture: data.authorProfilePicture || data.userProfilePicture || null,
@@ -190,11 +195,14 @@ export async function createPost(userId, userData, text, imageFiles = [], replyT
   }
 
   // Create the post document
+  const displayName = userData.displayName || userData.username;
   const postsRef = collection(db, "posts");
   const postDoc = await addDoc(postsRef, {
     // New fields
     authorId: userId,
     authorUsername: userData.username,
+    authorDisplayName: displayName,
+    displayName: displayName,
     authorAvatar: userData.avatarEmoji || "🔥",
     authorAvatarColor: userData.avatarColor || "green",
     authorProfilePicture: userData.profilePicture || null,
@@ -1211,13 +1219,16 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
   // 2. Get reposts from friends (not from self)
   const friendIdsOnly = friendIds.filter((id) => id && id !== userId);
   if (friendIdsOnly.length > 0) {
-    // Get usernames for repost attribution
+    // Get usernames and display names for repost attribution
     const usernameMap = new Map();
+    const displayNameMap = new Map();
     try {
       for (const friendId of friendIdsOnly.slice(0, 30)) {
         const userDoc = await getDoc(doc(db, "users", friendId));
         if (userDoc.exists()) {
-          usernameMap.set(friendId, userDoc.data().username || "Unknown");
+          const userData = userDoc.data();
+          usernameMap.set(friendId, userData.username || "Unknown");
+          displayNameMap.set(friendId, userData.displayName || userData.username || "Unknown");
         }
       }
     } catch (error) {
@@ -1251,6 +1262,7 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
                   ...post,
                   isRepost: true,
                   repostedBy: usernameMap.get(repostData.userId) || "Someone",
+                  repostedByDisplayName: displayNameMap.get(repostData.userId) || usernameMap.get(repostData.userId) || "Someone",
                   repostedById: repostData.userId,
                   repostedAt: repostData.createdAt?.toDate?.() || new Date(),
                 });
@@ -1283,6 +1295,7 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
                   ...post,
                   isRepost: true,
                   repostedBy: usernameMap.get(repostData.userId) || "Someone",
+                  repostedByDisplayName: displayNameMap.get(repostData.userId) || usernameMap.get(repostData.userId) || "Someone",
                   repostedById: repostData.userId,
                   repostedAt: repostData.createdAt?.toDate?.() || new Date(),
                 });

@@ -90,7 +90,9 @@ function PostCard({
             </div>
           )}
           <div className="profile-post-user-text">
-            <span className="profile-post-username">{post.username}</span>
+            <span className="profile-post-display-name">{post.displayName || post.username}</span>
+            <span className="profile-post-handle">@{post.username?.toLowerCase()}</span>
+            <span className="profile-post-dot">·</span>
             <span className="profile-post-time">{formatTimeAgo(post.createdAt)}</span>
           </div>
         </button>
@@ -748,8 +750,25 @@ function ProfilePage() {
           <input ref={profilePicRef} type="file" accept="image/*" onChange={handlePicUpload} hidden />
         </div>
 
-        {/* Username */}
-        <h1 className="username">{profile.username}</h1>
+        {/* Display Name + Handle */}
+        <h1 className="display-name">{profile.displayName || profile.username}</h1>
+        <span className="profile-handle">@{profile.username?.toLowerCase()}</span>
+        {isOwnProfile && (
+          <button
+            className="edit-display-name-btn"
+            onClick={() => {
+              const newName = prompt("Edit Display Name\n\nYour display name can include emojis, spaces, and special characters. Your @handle cannot be changed.", profile.displayName || profile.username || "");
+              if (newName && newName.trim()) {
+                const trimmed = newName.trim().slice(0, 30);
+                updateProfile(user.uid, { displayName: trimmed }).then(() => {
+                  setProfile(prev => ({ ...prev, displayName: trimmed }));
+                }).catch(() => alert("Failed to update display name"));
+              }
+            }}
+          >
+            ✏️ Edit Display Name
+          </button>
+        )}
 
         {/* Level Badge */}
         <div className="level-badge">

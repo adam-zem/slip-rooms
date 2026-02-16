@@ -180,8 +180,10 @@ export async function searchUsers(searchTerm, currentUserId, maxResults = 10) {
         users.push({
           id: doc.id,
           username: data.username,
+          displayName: data.displayName || data.username,
           avatarEmoji: data.avatarEmoji || "🔥",
           avatarColor: data.avatarColor || "green",
+          profilePicture: data.profilePicture || null,
           level: calculateLevel(data.xp || 0),
         });
       }

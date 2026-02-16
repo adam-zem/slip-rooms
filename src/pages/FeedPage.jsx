@@ -151,7 +151,7 @@ function PostCard({
           <svg viewBox="0 0 24 24" width="14" height="14">
             <path fill="currentColor" d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"/>
           </svg>
-          <span>@{post.repostedBy} reposted</span>
+          <span>{post.repostedByDisplayName || post.repostedBy} reposted</span>
         </div>
       )}
       {/* Reply context */}
@@ -182,7 +182,7 @@ function PostCard({
       <div className="x-post-content">
         <div className="x-post-header">
           <button className="x-post-user-link" onClick={(e) => { e.stopPropagation(); onUserClick(post.userId); }}>
-            <span className="x-post-name">{post.username}</span>
+            <span className="x-post-name">{post.displayName || post.username}</span>
             <span className="x-post-handle">@{post.username?.toLowerCase()}</span>
             <span className="x-post-dot">·</span>
             <span className="x-post-time">{formatTimeAgo(post.createdAt)}</span>
@@ -400,7 +400,7 @@ function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onT
                   )}
                 </button>
                 <div className="x-post-user-info">
-                  <span className="x-post-name">{post.username}</span>
+                  <span className="x-post-name">{post.displayName || post.username}</span>
                   <span className="x-post-handle">@{post.username?.toLowerCase()}</span>
                 </div>
               </div>
@@ -461,7 +461,10 @@ function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onT
                             {user.avatarEmoji}
                           </div>
                         )}
-                        <span className="x-mention-username">@{user.username}</span>
+                        <div className="x-mention-user-info">
+                          <span className="x-mention-display-name">{user.displayName || user.username}</span>
+                          <span className="x-mention-handle">@{user.username?.toLowerCase()}</span>
+                        </div>
                       </button>
                     ))}
                   </div>

@@ -1013,6 +1013,23 @@
   font-weight: 600;
 }
 
+.x-mention-user-info {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.x-mention-display-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.x-mention-handle {
+  font-size: 12px;
+  color: #888;
+}
+
 /* Mention Link (in post text) */
 .mention-link {
   color: #22c55e;

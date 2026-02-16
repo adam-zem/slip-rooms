@@ -139,9 +139,11 @@ export default function AuthPage() {
       // Reserve the username first
       await reserveUsername(username, pendingSocialUser.uid);
 
+      const trimmedUsername = username.trim().toLowerCase();
       await setDoc(doc(db, "users", pendingSocialUser.uid), {
-        username: username.trim(),
-        usernameLower: username.trim().toLowerCase(),
+        username: trimmedUsername,
+        displayName: trimmedUsername, // Initially same as handle, can be changed later
+        usernameLower: trimmedUsername,
         email: pendingSocialUser.email || "",
         createdAt: new Date().toISOString(),
         provider: pendingSocialUser.providerData?.[0]?.providerId || "social",
@@ -261,9 +263,11 @@ export default function AuthPage() {
         await reserveUsername(username, userCred.user.uid);
 
         // Save username to Firestore
+        const trimmedUsername = username.trim().toLowerCase();
         await setDoc(doc(db, "users", userCred.user.uid), {
-          username: username.trim(),
-          usernameLower: username.trim().toLowerCase(),
+          username: trimmedUsername,
+          displayName: trimmedUsername, // Initially same as handle, can be changed later
+          usernameLower: trimmedUsername,
           email: cleanEmail,
           createdAt: new Date().toISOString(),
           provider: "email",
@@ -381,20 +385,22 @@ export default function AuthPage() {
 
           <form onSubmit={saveUsernameForSocialUser} className="auth-form">
             <p className="auth-username-prompt">
-              Choose a username for the chat rooms
+              Choose a permanent @handle
             </p>
 
             <div className="auth-field">
               <input
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Username"
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                placeholder="Handle (@username)"
                 autoComplete="username"
                 disabled={loading}
                 className="auth-input"
                 autoFocus
+                maxLength={20}
               />
+              <p className="auth-handle-hint">This will be your @handle. It can't be changed later. Your display name can be changed anytime.</p>
             </div>
 
             {error && <div className="auth-error">{error}</div>}
@@ -673,12 +679,14 @@ export default function AuthPage() {
               <input
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Username"
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                placeholder="Handle (permanent @username)"
                 autoComplete="username"
                 disabled={loading}
                 className="auth-input"
+                maxLength={20}
               />
+              <p className="auth-handle-hint">This will be your @handle. It can't be changed later. Your display name can be changed anytime.</p>
             </div>
           )}
 

@@ -130,7 +130,7 @@
   opacity: 1;
 }
 
-/* Username */
+/* Username (legacy) */
 .username {
   font-size: 36px;
   font-weight: 700;
@@ -138,6 +138,38 @@
   margin: 28px 0 12px;
   letter-spacing: -0.5px;
   text-shadow: 0 0 30px rgba(34, 197, 94, 0.4);
+}
+
+/* Display Name + Handle */
+.display-name {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--matrix-green);
+  margin: 28px 0 4px;
+  letter-spacing: -0.5px;
+  text-shadow: 0 0 30px rgba(34, 197, 94, 0.4);
+}
+
+.profile-handle {
+  font-size: 16px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.edit-display-name-btn {
+  background: transparent;
+  border: 1px solid var(--matrix-green-dim);
+  color: var(--matrix-green);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  margin-bottom: 12px;
+  transition: all 0.2s;
+}
+
+.edit-display-name-btn:hover {
+  background: rgba(34, 197, 94, 0.1);
 }
 
 /* Level Badge */
@@ -615,7 +647,10 @@
 
 .profile-post-user-text {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
 
 .profile-post-username {
@@ -624,8 +659,24 @@
   color: #fff;
 }
 
+.profile-post-display-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.profile-post-handle {
+  font-size: 14px;
+  color: #888;
+}
+
+.profile-post-dot {
+  font-size: 14px;
+  color: #666;
+}
+
 .profile-post-time {
-  font-size: 12px;
+  font-size: 13px;
   color: #666;
 }
 
