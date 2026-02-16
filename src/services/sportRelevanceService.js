@@ -1,5 +1,6 @@
 // src/services/sportRelevanceService.js
 // Dynamically order sports by relevance (live games, today's games, upcoming)
+// OUT OF SEASON sports go to the bottom of the list
 
 import { fetchAllGames } from "./espnService";
 
@@ -29,19 +30,19 @@ function isGameFinal(game) {
 
 /**
  * Calculate relevance stats for games
+ * Now tracks weekGames (7 days) for offseason detection
  */
 function calculateGameStats(games) {
-  const now = Date.now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
-  const in48h = new Date();
-  in48h.setHours(in48h.getHours() + 48);
+  const weekEnd = new Date();
+  weekEnd.setDate(weekEnd.getDate() + 7);
 
   let liveGames = 0;
   let todayGames = 0;
-  let next48hGames = 0;
+  let weekGames = 0;
 
   games.forEach((game) => {
     if (isGameFinal(game)) return;
@@ -49,29 +50,34 @@ function calculateGameStats(games) {
     if (isGameLive(game)) {
       liveGames++;
       todayGames++;
-      next48hGames++;
+      weekGames++;
       return;
     }
 
     const gameTime = new Date(game.date).getTime();
 
+    // Today's games (scheduled, not started yet)
     if (gameTime >= todayStart.getTime() && gameTime <= todayEnd.getTime()) {
       todayGames++;
-      next48hGames++;
-    } else if (gameTime <= in48h.getTime()) {
-      next48hGames++;
+      weekGames++;
+    }
+    // This week's games (next 7 days)
+    else if (gameTime > todayEnd.getTime() && gameTime <= weekEnd.getTime()) {
+      weekGames++;
     }
   });
 
-  return { liveGames, todayGames, next48hGames };
+  return { liveGames, todayGames, weekGames };
 }
 
 /**
  * Calculate relevance score
- * Live games are worth the most, then today, then 48h
+ * Live games = 100 points each (highest priority)
+ * Today's games = 10 points each
+ * Week's games = 1 point each
  */
 function calculateRelevanceScore(stats) {
-  return stats.liveGames * 1000 + stats.todayGames * 100 + stats.next48hGames * 10;
+  return stats.liveGames * 100 + stats.todayGames * 10 + stats.weekGames * 1;
 }
 
 /**
@@ -85,20 +91,31 @@ export function getSortedSportsFromData(gamesBySport) {
     const stats = calculateGameStats(games);
     const relevanceScore = calculateRelevanceScore(stats);
 
+    // Sport is "offseason" if no games in the next 7 days
+    const isOffseason = stats.weekGames === 0;
+
     return {
       ...sport,
       ...stats,
       relevanceScore,
+      isOffseason,
       rooms: [], // Initialize empty rooms array
     };
   });
 
   // Sort by relevance score (highest first)
-  const sorted = sportsWithRelevance.sort((a, b) => b.relevanceScore - a.relevanceScore);
+  // Offseason sports (no games in next 7 days) go to the bottom
+  const sorted = sportsWithRelevance.sort((a, b) => {
+    // First, sort by offseason status (in-season first)
+    if (a.isOffseason && !b.isOffseason) return 1;
+    if (!a.isOffseason && b.isOffseason) return -1;
+    // Then by relevance score
+    return b.relevanceScore - a.relevanceScore;
+  });
 
   console.log(
     "[sportRelevance] Sorted sports:",
-    sorted.map((s) => `${s.id}: live=${s.liveGames}, today=${s.todayGames}, score=${s.relevanceScore}`)
+    sorted.map((s) => `${s.id}(${s.relevanceScore}${s.isOffseason ? " OFF" : ""})`)
   );
 
   return sorted;
@@ -115,13 +132,14 @@ export async function getSortedSports() {
     return getSortedSportsFromData(gamesBySport);
   } catch (error) {
     console.error("[sportRelevance] Error fetching games:", error);
-    // Return default order on error
+    // Return default order on error - assume all are offseason
     return SPORT_CONFIGS.map((sport) => ({
       ...sport,
       liveGames: 0,
       todayGames: 0,
-      next48hGames: 0,
+      weekGames: 0,
       relevanceScore: 0,
+      isOffseason: true,
       rooms: [],
     }));
   }

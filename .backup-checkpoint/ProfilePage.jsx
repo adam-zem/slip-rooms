@@ -1,4 +1,4 @@
-// src/pages/ProfilePage.jsx - Profile with Social Wall
+// src/pages/ProfilePage.jsx - Clean Minimal Profile
 import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -9,36 +9,7 @@ import { getProfile, updateProfile, createProfileIfMissing } from "../services/p
 import { getFriends, sendFriendRequest, removeFriend, checkFriendship, getPendingRequests, acceptFriendRequest, declineFriendRequest } from "../services/friendsService";
 import { getGreatestHits, addGreatestHit, deleteGreatestHit, fileToBase64 } from "../services/greatestHitsService";
 import { deleteUserAccount } from "../services/accountService";
-import {
-  createPost,
-  subscribeToUserPosts,
-  getUserOriginalPosts,
-  getUserPostsWithReposts,
-  getUserReplies,
-  getUserMediaPosts,
-  getUserLikedPosts,
-  thumbsUpPost,
-  removeThumbsUp,
-  thumbsDownPost,
-  removeThumbsDown,
-  repost,
-  unrepost,
-  deletePost,
-  subscribeToComments,
-  addComment,
-} from "../services/postsService";
-import ShareModal from "../components/ShareModal";
 import "./ProfilePage.css";
-
-// Avatar colors
-const COLOR_MAP = {
-  green: "#047857",
-  blue: "#3b82f6",
-  purple: "#a855f7",
-  orange: "#f97316",
-  red: "#ef4444",
-  pink: "#ec4899",
-};
 
 function getLevelEmoji(level) {
   if (level >= 20) return "👑";
@@ -46,187 +17,6 @@ function getLevelEmoji(level) {
   if (level >= 10) return "⭐";
   if (level >= 5) return "💪";
   return "🐣";
-}
-
-function formatTimeAgo(date) {
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-// Post Card Component
-function PostCard({
-  post,
-  currentUserId,
-  onThumbsUp,
-  onThumbsDown,
-  onComment,
-  onDelete,
-  onShare,
-  onUserClick,
-}) {
-  const hasThumbsUp = (post.thumbsUp || []).includes(currentUserId);
-  const hasThumbsDown = (post.thumbsDown || []).includes(currentUserId);
-  const isOwner = post.userId === currentUserId;
-  const avatarColor = COLOR_MAP[post.userAvatarColor || "green"] || COLOR_MAP.green;
-
-  return (
-    <div className="profile-post-card">
-      <div className="profile-post-header">
-        <button className="profile-post-user-info" onClick={() => onUserClick(post.userId)}>
-          {post.userProfilePicture ? (
-            <img src={post.userProfilePicture} alt="" className="profile-post-avatar" />
-          ) : (
-            <div className="profile-post-avatar-placeholder" style={{ backgroundColor: avatarColor + "30", borderColor: avatarColor }}>
-              <span>{post.userAvatar}</span>
-            </div>
-          )}
-          <div className="profile-post-user-text">
-            <span className="profile-post-display-name">{post.displayName || post.username}</span>
-            <span className="profile-post-handle">@{post.username?.toLowerCase()}</span>
-            <span className="profile-post-dot">·</span>
-            <span className="profile-post-time">{formatTimeAgo(post.createdAt)}</span>
-          </div>
-        </button>
-        {isOwner && (
-          <button className="profile-post-menu" onClick={onDelete}>...</button>
-        )}
-      </div>
-
-      {post.text && <p className="profile-post-text">{post.text}</p>}
-
-      {post.images.length > 0 && (
-        <div className={`profile-post-images ${post.images.length === 1 ? "single" : "double"}`}>
-          {post.images.map((img, idx) => (
-            <img key={idx} src={img} alt="" className="profile-post-image" />
-          ))}
-        </div>
-      )}
-
-      <div className="profile-post-actions">
-        <button className={`profile-post-action ${hasThumbsUp ? "active-up" : ""}`} onClick={onThumbsUp}>
-          <span className="action-icon">{hasThumbsUp ? "👍" : "👍"}</span>
-          {post.thumbsUpCount > 0 && <span className="action-count">{post.thumbsUpCount}</span>}
-        </button>
-        <button className={`profile-post-action ${hasThumbsDown ? "active-down" : ""}`} onClick={onThumbsDown}>
-          <span className="action-icon">{hasThumbsDown ? "👎" : "👎"}</span>
-          {post.thumbsDownCount > 0 && <span className="action-count">{post.thumbsDownCount}</span>}
-        </button>
-        <button className="profile-post-action" onClick={onComment}>
-          <span className="action-icon">💬</span>
-          {post.commentsCount > 0 && <span className="action-count">{post.commentsCount}</span>}
-        </button>
-        <button className="profile-post-action" onClick={onShare}>
-          <span className="action-icon">↗️</span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Comments Modal
-function CommentsModal({ post, currentUser, userProfile, onClose }) {
-  const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState("");
-  const [sending, setSending] = useState(false);
-  const commentsEndRef = useRef(null);
-
-  useEffect(() => {
-    if (!post) return;
-    const unsubscribe = subscribeToComments(post.id, setComments);
-    return () => unsubscribe();
-  }, [post?.id]);
-
-  useEffect(() => {
-    commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [comments]);
-
-  const handleSend = async () => {
-    if (!newComment.trim() || !post || sending) return;
-    setSending(true);
-    try {
-      await addComment(post.id, currentUser.uid, {
-        username: userProfile?.username || "User",
-        avatarEmoji: userProfile?.avatarEmoji || "🔥",
-        avatarColor: userProfile?.avatarColor || "green",
-        profilePicture: userProfile?.profilePicture || null,
-      }, newComment);
-      setNewComment("");
-    } catch (error) {
-      console.error("Error posting comment:", error);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="profile-comments-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="profile-comments-header">
-          <h3>Comments</h3>
-          <button className="close-x" onClick={onClose}>&times;</button>
-        </div>
-        <div className="profile-comments-list">
-          {comments.length === 0 ? (
-            <div className="profile-comments-empty">
-              <p>No comments yet</p>
-              <p className="sub">Be the first to comment!</p>
-            </div>
-          ) : (
-            comments.map((comment) => {
-              const color = COLOR_MAP[comment.userAvatarColor || "green"] || COLOR_MAP.green;
-              return (
-                <div key={comment.id} className="profile-comment-item">
-                  {comment.userProfilePicture ? (
-                    <img src={comment.userProfilePicture} alt="" className="profile-comment-avatar" />
-                  ) : (
-                    <div className="profile-comment-avatar-placeholder" style={{ backgroundColor: color + "30" }}>
-                      <span>{comment.userAvatar}</span>
-                    </div>
-                  )}
-                  <div className="profile-comment-content">
-                    <div className="profile-comment-bubble">
-                      <span className="profile-comment-username">{comment.username}</span>
-                      <p className="profile-comment-text">{comment.text}</p>
-                    </div>
-                    <span className="profile-comment-time">{formatTimeAgo(comment.createdAt)}</span>
-                  </div>
-                </div>
-              );
-            })
-          )}
-          <div ref={commentsEndRef} />
-        </div>
-        <div className="profile-comment-input-container">
-          <textarea
-            value={newComment}
-            onChange={(e) => setNewComment(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Write a comment..."
-            maxLength={500}
-          />
-          <button className="profile-comment-send-btn" onClick={handleSend} disabled={!newComment.trim() || sending}>
-            {sending ? "..." : "Send"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function ProfilePage() {
@@ -244,20 +34,6 @@ function ProfilePage() {
   const [friendRequestSent, setFriendRequestSent] = useState(false);
   const [hits, setHits] = useState([]);
   const [hitsLoading, setHitsLoading] = useState(false);
-
-  // Posts state
-  const [posts, setPosts] = useState([]);
-  const [newPostText, setNewPostText] = useState("");
-  const [newPostImages, setNewPostImages] = useState([]);
-  const [isPosting, setIsPosting] = useState(false);
-  const [commentsPost, setCommentsPost] = useState(null);
-  const [shareModalOpen, setShareModalOpen] = useState(false);
-  const [sharePost, setSharePost] = useState(null);
-  const postImageRef = useRef(null);
-
-  // Profile tabs
-  const [activeTab, setActiveTab] = useState('posts');
-  const [tabLoading, setTabLoading] = useState(false);
 
   // Friend requests (only for own profile)
   const [friendRequests, setFriendRequests] = useState([]);
@@ -310,42 +86,6 @@ function ProfilePage() {
     if (targetUserId) loadProfile();
     else setLoading(false);
   }, [targetUserId, user?.uid, isOwnProfile, user, userProfile]);
-
-  // Load posts based on active tab
-  useEffect(() => {
-    if (!targetUserId) return;
-
-    const loadTabData = async () => {
-      setTabLoading(true);
-      try {
-        let data = [];
-        switch (activeTab) {
-          case 'posts':
-            // Include reposts in the posts tab
-            data = await getUserPostsWithReposts(targetUserId);
-            break;
-          case 'replies':
-            data = await getUserReplies(targetUserId);
-            break;
-          case 'media':
-            data = await getUserMediaPosts(targetUserId);
-            break;
-          case 'likes':
-            data = await getUserLikedPosts(targetUserId);
-            break;
-          default:
-            data = await getUserPostsWithReposts(targetUserId);
-        }
-        setPosts(data);
-      } catch (error) {
-        console.error('Error loading tab data:', error);
-      } finally {
-        setTabLoading(false);
-      }
-    };
-
-    loadTabData();
-  }, [targetUserId, activeTab]);
 
   // Check friendship
   useEffect(() => {
@@ -473,10 +213,13 @@ function ProfilePage() {
     }
   };
 
+  // Accept friend request
   const handleAcceptRequest = async (requestId) => {
     try {
       await acceptFriendRequest(requestId);
+      // Remove from local state
       setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+      // Refresh friends list
       const updatedFriends = await getFriends(user.uid);
       setFriends(updatedFriends);
     } catch (err) {
@@ -485,134 +228,16 @@ function ProfilePage() {
     }
   };
 
+  // Decline friend request
   const handleDeclineRequest = async (requestId) => {
     try {
       await declineFriendRequest(requestId);
+      // Remove from local state
       setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
     } catch (err) {
       console.error("Decline request error:", err);
       alert("Failed to decline request");
     }
-  };
-
-  // Post handlers
-  const handlePickPostImage = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) return alert("Please select an image");
-    if (file.size > 5 * 1024 * 1024) return alert("Max 5MB");
-    if (newPostImages.length >= 2) return alert("Max 2 images per post");
-    setNewPostImages([...newPostImages, file]);
-  };
-
-  const handleRemovePostImage = (index) => {
-    setNewPostImages(newPostImages.filter((_, i) => i !== index));
-  };
-
-  const handleCreatePost = async () => {
-    if (!newPostText.trim() && newPostImages.length === 0) {
-      alert("Please write something or add an image");
-      return;
-    }
-    setIsPosting(true);
-    try {
-      await createPost(
-        user.uid,
-        {
-          username: userProfile?.username || "User",
-          avatarEmoji: userProfile?.avatarEmoji || "🔥",
-          avatarColor: userProfile?.avatarColor || "green",
-          profilePicture: userProfile?.profilePicture || null,
-        },
-        newPostText,
-        newPostImages
-      );
-      setNewPostText("");
-      setNewPostImages([]);
-    } catch (err) {
-      console.error("Error creating post:", err);
-      alert("Failed to create post");
-    } finally {
-      setIsPosting(false);
-    }
-  };
-
-  const handleThumbsUp = async (post) => {
-    if (!user?.uid) return;
-    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
-    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
-
-    // Optimistic update
-    setPosts((prev) => prev.map((p) => {
-      if (p.id !== post.id) return p;
-      if (hasThumbsUp) {
-        return { ...p, thumbsUp: p.thumbsUp.filter((id) => id !== user.uid), thumbsUpCount: p.thumbsUpCount - 1 };
-      } else {
-        return {
-          ...p,
-          thumbsUp: [...p.thumbsUp, user.uid],
-          thumbsUpCount: p.thumbsUpCount + 1,
-          thumbsDown: hasThumbsDown ? p.thumbsDown.filter((id) => id !== user.uid) : p.thumbsDown,
-          thumbsDownCount: hasThumbsDown ? p.thumbsDownCount - 1 : p.thumbsDownCount,
-        };
-      }
-    }));
-
-    try {
-      if (hasThumbsUp) {
-        await removeThumbsUp(post.id, user.uid);
-      } else {
-        await thumbsUpPost(post.id, user.uid, hasThumbsDown);
-      }
-    } catch (err) {
-      console.error("Error toggling thumbs up:", err);
-    }
-  };
-
-  const handleThumbsDown = async (post) => {
-    if (!user?.uid) return;
-    const hasThumbsUp = (post.thumbsUp || []).includes(user.uid);
-    const hasThumbsDown = (post.thumbsDown || []).includes(user.uid);
-
-    // Optimistic update
-    setPosts((prev) => prev.map((p) => {
-      if (p.id !== post.id) return p;
-      if (hasThumbsDown) {
-        return { ...p, thumbsDown: p.thumbsDown.filter((id) => id !== user.uid), thumbsDownCount: p.thumbsDownCount - 1 };
-      } else {
-        return {
-          ...p,
-          thumbsDown: [...p.thumbsDown, user.uid],
-          thumbsDownCount: p.thumbsDownCount + 1,
-          thumbsUp: hasThumbsUp ? p.thumbsUp.filter((id) => id !== user.uid) : p.thumbsUp,
-          thumbsUpCount: hasThumbsUp ? p.thumbsUpCount - 1 : p.thumbsUpCount,
-        };
-      }
-    }));
-
-    try {
-      if (hasThumbsDown) {
-        await removeThumbsDown(post.id, user.uid);
-      } else {
-        await thumbsDownPost(post.id, user.uid, hasThumbsUp);
-      }
-    } catch (err) {
-      console.error("Error toggling thumbs down:", err);
-    }
-  };
-
-  const handleDeletePost = async (post) => {
-    if (!window.confirm("Delete this post?")) return;
-    try {
-      await deletePost(post.id);
-    } catch (err) {
-      console.error("Error deleting post:", err);
-    }
-  };
-
-  const handleSharePost = (post) => {
-    setSharePost(post);
-    setShareModalOpen(true);
   };
 
   // Hit upload
@@ -669,11 +294,16 @@ function ProfilePage() {
     navigate("/");
   };
 
+  // Delete account handler
   const handleDeleteAccount = async () => {
-    if (deleteConfirmText !== "DELETE" && deleteConfirmText !== profile?.username) return;
+    if (deleteConfirmText !== "DELETE" && deleteConfirmText !== profile?.username) {
+      return;
+    }
+
     setIsDeleting(true);
     try {
       await deleteUserAccount(user.uid);
+      // User will be signed out automatically after auth deletion
       navigate("/");
     } catch (err) {
       console.error("Delete account error:", err);
@@ -687,7 +317,6 @@ function ProfilePage() {
   };
 
   const isPrivate = !isOwnProfile && profile && !profile.publicProfile && !isFriend;
-  const avatarColor = COLOR_MAP[profile?.avatarColor || "green"] || COLOR_MAP.green;
 
   // Loading states
   if (!authReady || loading) {
@@ -747,32 +376,26 @@ function ProfilePage() {
             <span className="avatar-emoji">{profile.avatarEmoji || "🔥"}</span>
           )}
           {isOwnProfile && <div className="avatar-hover">📷</div>}
-          <input ref={profilePicRef} type="file" accept="image/*" onChange={handlePicUpload} hidden />
+          <input
+            ref={profilePicRef}
+            type="file"
+            accept="image/*"
+            onChange={handlePicUpload}
+            hidden
+          />
         </div>
 
-        {/* Display Name + Handle */}
-        <h1 className="display-name">{profile.displayName || profile.username}</h1>
-        <span className="profile-handle">@{profile.username?.toLowerCase()}</span>
-        {isOwnProfile && (
-          <button
-            className="edit-display-name-btn"
-            onClick={() => {
-              const newName = prompt("Edit Display Name\n\nYour display name can include emojis, spaces, and special characters. Your @handle cannot be changed.", profile.displayName || profile.username || "");
-              if (newName && newName.trim()) {
-                const trimmed = newName.trim().slice(0, 30);
-                updateProfile(user.uid, { displayName: trimmed }).then(() => {
-                  setProfile(prev => ({ ...prev, displayName: trimmed }));
-                }).catch(() => alert("Failed to update display name"));
-              }
-            }}
-          >
-            ✏️ Edit Display Name
-          </button>
-        )}
+        {/* Username */}
+        <h1 className="username">{profile.username}</h1>
 
         {/* Level Badge */}
         <div className="level-badge">
           LVL {profile.level} {getLevelEmoji(profile.level)} {profile.title}
+        </div>
+
+        {/* XP Bar */}
+        <div className="xp-bar">
+          <div className="xp-fill" style={{ width: `${profile.progress || 0}%` }} />
         </div>
 
         {/* Bio */}
@@ -826,7 +449,7 @@ function ProfilePage() {
           </button>
         )}
 
-        {/* Friend Requests Section */}
+        {/* Friend Requests Section (only on own profile, only if has requests) */}
         {isOwnProfile && friendRequests.length > 0 && (
           <div className="friend-requests-section">
             <h3 className="requests-title">Friend Requests</h3>
@@ -845,8 +468,18 @@ function ProfilePage() {
                     </div>
                   </div>
                   <div className="request-actions">
-                    <button className="request-btn accept" onClick={() => handleAcceptRequest(req.id)}>Accept</button>
-                    <button className="request-btn decline" onClick={() => handleDeclineRequest(req.id)}>Decline</button>
+                    <button
+                      className="request-btn accept"
+                      onClick={() => handleAcceptRequest(req.id)}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      className="request-btn decline"
+                      onClick={() => handleDeclineRequest(req.id)}
+                    >
+                      Decline
+                    </button>
                   </div>
                 </div>
               ))}
@@ -863,128 +496,6 @@ function ProfilePage() {
               <button className="btn" disabled>Request Sent</button>
             ) : (
               <button className="btn primary" onClick={handleAddFriend}>+ Add Friend</button>
-            )}
-          </div>
-        )}
-
-        {/* Create Post Section (only on own profile) */}
-        {isOwnProfile && (
-          <div className="create-post-section">
-            <div className="create-post-header">
-              {userProfile?.profilePicture ? (
-                <img src={userProfile.profilePicture} alt="" className="create-post-avatar" />
-              ) : (
-                <div className="create-post-avatar-placeholder" style={{ backgroundColor: avatarColor + "30" }}>
-                  <span>{userProfile?.avatarEmoji || "🔥"}</span>
-                </div>
-              )}
-              <textarea
-                value={newPostText}
-                onChange={(e) => setNewPostText(e.target.value)}
-                placeholder="What's on your mind?"
-                maxLength={500}
-                className="create-post-input"
-              />
-            </div>
-
-            {newPostImages.length > 0 && (
-              <div className="create-post-previews">
-                {newPostImages.map((file, idx) => (
-                  <div key={idx} className="create-post-preview">
-                    <img src={URL.createObjectURL(file)} alt="" />
-                    <button className="remove-preview" onClick={() => handleRemovePostImage(idx)}>&times;</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="create-post-actions">
-              <button
-                className="add-image-btn"
-                onClick={() => postImageRef.current?.click()}
-                disabled={newPostImages.length >= 2}
-              >
-                📷 Photo ({newPostImages.length}/2)
-              </button>
-              <button
-                className="post-btn"
-                onClick={handleCreatePost}
-                disabled={(!newPostText.trim() && newPostImages.length === 0) || isPosting}
-              >
-                {isPosting ? "Posting..." : "Post"}
-              </button>
-              <input ref={postImageRef} type="file" accept="image/*" onChange={handlePickPostImage} hidden />
-            </div>
-          </div>
-        )}
-
-        {/* Profile Tabs */}
-        {!isPrivate && (
-          <div className="profile-tabs">
-            <button
-              className={`profile-tab ${activeTab === 'posts' ? 'active' : ''}`}
-              onClick={() => setActiveTab('posts')}
-            >
-              POSTS
-            </button>
-            <button
-              className={`profile-tab ${activeTab === 'replies' ? 'active' : ''}`}
-              onClick={() => setActiveTab('replies')}
-            >
-              REPLIES
-            </button>
-            <button
-              className={`profile-tab ${activeTab === 'media' ? 'active' : ''}`}
-              onClick={() => setActiveTab('media')}
-            >
-              MEDIA
-            </button>
-            <button
-              className={`profile-tab ${activeTab === 'likes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('likes')}
-            >
-              LIKES
-            </button>
-          </div>
-        )}
-
-        {/* Wall / Posts Section */}
-        {!isPrivate && (
-          <div className="wall-section">
-            {tabLoading ? (
-              <div className="tab-loading">
-                <div className="spinner" />
-              </div>
-            ) : posts.length === 0 ? (
-              <div className="wall-empty">
-                <span>📝</span>
-                <p>
-                  {activeTab === 'posts' && "No posts yet"}
-                  {activeTab === 'replies' && "No replies yet"}
-                  {activeTab === 'media' && "No media posts yet"}
-                  {activeTab === 'likes' && "No liked posts yet"}
-                </p>
-                <p className="sub">
-                  {activeTab === 'posts' && isOwnProfile && "Share what's on your mind!"}
-                  {activeTab === 'replies' && "Reply to posts to see them here"}
-                  {activeTab === 'media' && "Posts with images will appear here"}
-                  {activeTab === 'likes' && "Like posts to see them here"}
-                </p>
-              </div>
-            ) : (
-              posts.map((post) => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  currentUserId={user?.uid || ""}
-                  onThumbsUp={() => handleThumbsUp(post)}
-                  onThumbsDown={() => handleThumbsDown(post)}
-                  onComment={() => setCommentsPost(post)}
-                  onDelete={() => handleDeletePost(post)}
-                  onShare={() => handleSharePost(post)}
-                  onUserClick={(userId) => navigate(`/profile/${userId}`)}
-                />
-              ))
             )}
           </div>
         )}
@@ -1026,26 +537,6 @@ function ProfilePage() {
           )}
         </div>
       </div>
-
-      {/* Comments Modal */}
-      {commentsPost && (
-        <CommentsModal
-          post={commentsPost}
-          currentUser={user}
-          userProfile={userProfile}
-          onClose={() => setCommentsPost(null)}
-        />
-      )}
-
-      {/* Share Modal */}
-      <ShareModal
-        isOpen={shareModalOpen}
-        onClose={() => { setShareModalOpen(false); setSharePost(null); }}
-        type="post"
-        post={sharePost}
-        currentUser={user}
-        userProfile={userProfile}
-      />
 
       {/* Settings Modal */}
       {showSettings && (
@@ -1091,11 +582,7 @@ function ProfilePage() {
               <div className="friends-list">
                 {friends.map((f) => (
                   <div key={f.id} className="friend-row" onClick={() => { setShowFriends(false); navigate(`/profile/${f.id}`); }}>
-                    {f.profilePicture ? (
-                      <img src={f.profilePicture} alt={f.username} className="friend-avatar-img" />
-                    ) : (
-                      <span className="friend-emoji">{f.avatarEmoji || "🔥"}</span>
-                    )}
+                    <span className="friend-emoji">{f.avatarEmoji || "🔥"}</span>
                     <span className="friend-name">{f.username}</span>
                   </div>
                 ))}

@@ -21,7 +21,7 @@ import "./TheFloor.css";
 
 // Avatar colors
 const COLOR_MAP = {
-  green: "#22c55e",
+  green: "#047857",
   blue: "#3b82f6",
   purple: "#a855f7",
   orange: "#f97316",
