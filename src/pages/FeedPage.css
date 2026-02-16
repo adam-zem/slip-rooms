@@ -547,6 +547,31 @@
   background-color: rgba(255, 165, 0, 0.1);
 }
 
+.x-action-repost:hover,
+.x-action-repost.active {
+  color: #22c55e;
+}
+
+.x-action-repost:hover svg,
+.x-action-repost.active svg {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.x-repost-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 52px;
+  padding-bottom: 4px;
+  color: #666;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.x-repost-label svg {
+  color: #22c55e;
+}
+
 .x-action-share:hover {
   color: #22c55e;
 }

@@ -60,6 +60,7 @@ function mapDocToPost(docSnap) {
     thumbsUpCount: data.metrics?.likesCount ?? data.thumbsUpCount ?? 0,
     thumbsDownCount: data.metrics?.dislikesCount ?? data.thumbsDownCount ?? 0,
     commentsCount: data.metrics?.repliesCount ?? data.commentsCount ?? 0,
+    repostsCount: data.metrics?.repostsCount ?? 0,
     images: data.media || data.images || [],
     userId: data.authorId || data.userId || "",
     username: data.authorUsername || data.username || "",
@@ -345,6 +346,69 @@ export async function getUserOriginalPosts(userId, postLimit = 20) {
     .map(mapDocToPost)
     .filter((post) => post.replyToPostId === null)
     .slice(0, postLimit);
+}
+
+/**
+ * Get user's original posts + reposts combined (for Profile POSTS tab)
+ * Returns original posts and reposted posts mixed, sorted by date
+ */
+export async function getUserPostsWithReposts(userId, postLimit = 20) {
+  // 1. Get user's original posts
+  const originalPosts = await getUserOriginalPosts(userId, postLimit);
+
+  // 2. Get user's reposts from the reposts collection
+  const repostsRef = collection(db, "reposts");
+  let repostsSnapshot;
+  try {
+    const repostsQ = query(
+      repostsRef,
+      where("userId", "==", userId),
+      orderBy("createdAt", "desc"),
+      limit(postLimit)
+    );
+    repostsSnapshot = await getDocs(repostsQ);
+  } catch (error) {
+    console.log("[PostsService] Reposts query failed, trying without orderBy");
+    const fallbackQ = query(
+      repostsRef,
+      where("userId", "==", userId),
+      limit(postLimit)
+    );
+    repostsSnapshot = await getDocs(fallbackQ);
+  }
+
+  // 3. Fetch the actual posts that were reposted
+  const repostedPosts = [];
+  for (const repostDoc of repostsSnapshot.docs) {
+    const repostData = repostDoc.data();
+    try {
+      const postDoc = await getDoc(doc(db, "posts", repostData.postId));
+      if (postDoc.exists()) {
+        const post = mapDocToPost(postDoc);
+        // Don't include reposts of your own posts
+        if (post.authorId !== userId) {
+          // Mark as repost and use repost timestamp for sorting
+          repostedPosts.push({
+            ...post,
+            isRepost: true,
+            repostedAt: repostData.createdAt?.toDate?.() || new Date(),
+          });
+        }
+      }
+    } catch (error) {
+      console.log(`[PostsService] Could not fetch reposted post ${repostData.postId}`);
+    }
+  }
+
+  // 4. Combine and sort by date (original posts use createdAt, reposts use repostedAt)
+  const combined = [...originalPosts, ...repostedPosts];
+  combined.sort((a, b) => {
+    const dateA = a.isRepost && a.repostedAt ? a.repostedAt : a.createdAt;
+    const dateB = b.isRepost && b.repostedAt ? b.repostedAt : b.createdAt;
+    return dateB.getTime() - dateA.getTime();
+  });
+
+  return combined.slice(0, postLimit);
 }
 
 /**
@@ -1080,6 +1144,10 @@ export async function deletePost(postId, parentPostId) {
 // FEED QUERIES
 // =============================================================================
 
+/**
+ * Get posts from user and their friends (Friends Feed)
+ * Includes original posts AND reposts from friends
+ */
 export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
   if (!userId) {
     console.warn("getFriendsFeedPosts called with invalid userId");
@@ -1098,7 +1166,9 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
   }
 
   const allPosts = [];
+  const seenPostIds = new Set();
 
+  // 1. Get original posts from friends
   for (const chunk of chunks) {
     const postsRef = collection(db, "posts");
 
@@ -1113,7 +1183,10 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
     try {
       const snapshot = await getDocs(q);
       snapshot.docs.forEach((docSnap) => {
-        allPosts.push(mapDocToPost(docSnap));
+        if (!seenPostIds.has(docSnap.id)) {
+          seenPostIds.add(docSnap.id);
+          allPosts.push(mapDocToPost(docSnap));
+        }
       });
     } catch (error) {
       // Fallback to legacy userId field
@@ -1127,16 +1200,110 @@ export async function getFriendsFeedPosts(userId, friendIds, postLimit = 20) {
       const snapshot = await getDocs(q);
       snapshot.docs.forEach((docSnap) => {
         const post = mapDocToPost(docSnap);
-        if (post.replyToPostId === null) {
+        if (post.replyToPostId === null && !seenPostIds.has(docSnap.id)) {
+          seenPostIds.add(docSnap.id);
           allPosts.push(post);
         }
       });
     }
   }
 
-  return allPosts
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-    .slice(0, postLimit);
+  // 2. Get reposts from friends (not from self)
+  const friendIdsOnly = friendIds.filter((id) => id && id !== userId);
+  if (friendIdsOnly.length > 0) {
+    // Get usernames for repost attribution
+    const usernameMap = new Map();
+    try {
+      for (const friendId of friendIdsOnly.slice(0, 30)) {
+        const userDoc = await getDoc(doc(db, "users", friendId));
+        if (userDoc.exists()) {
+          usernameMap.set(friendId, userDoc.data().username || "Unknown");
+        }
+      }
+    } catch (error) {
+      console.log("[PostsService] Could not fetch friend usernames for reposts");
+    }
+
+    // Query reposts from friends
+    const repostsRef = collection(db, "reposts");
+    for (let i = 0; i < friendIdsOnly.length; i += 30) {
+      const chunk = friendIdsOnly.slice(i, i + 30);
+      try {
+        const repostsQ = query(
+          repostsRef,
+          where("userId", "in", chunk),
+          orderBy("createdAt", "desc"),
+          limit(postLimit)
+        );
+        const repostsSnapshot = await getDocs(repostsQ);
+
+        for (const repostDoc of repostsSnapshot.docs) {
+          const repostData = repostDoc.data();
+          if (seenPostIds.has(repostData.postId)) continue;
+
+          try {
+            const postDoc = await getDoc(doc(db, "posts", repostData.postId));
+            if (postDoc.exists()) {
+              const post = mapDocToPost(postDoc);
+              if (post.replyToPostId === null) {
+                seenPostIds.add(repostData.postId);
+                allPosts.push({
+                  ...post,
+                  isRepost: true,
+                  repostedBy: usernameMap.get(repostData.userId) || "Someone",
+                  repostedById: repostData.userId,
+                  repostedAt: repostData.createdAt?.toDate?.() || new Date(),
+                });
+              }
+            }
+          } catch (error) {
+            console.log(`[PostsService] Could not fetch reposted post ${repostData.postId}`);
+          }
+        }
+      } catch (error) {
+        console.log("[PostsService] Reposts query failed, trying without orderBy");
+        const fallbackQ = query(
+          repostsRef,
+          where("userId", "in", chunk),
+          limit(postLimit)
+        );
+        const repostsSnapshot = await getDocs(fallbackQ);
+
+        for (const repostDoc of repostsSnapshot.docs) {
+          const repostData = repostDoc.data();
+          if (seenPostIds.has(repostData.postId)) continue;
+
+          try {
+            const postDoc = await getDoc(doc(db, "posts", repostData.postId));
+            if (postDoc.exists()) {
+              const post = mapDocToPost(postDoc);
+              if (post.replyToPostId === null) {
+                seenPostIds.add(repostData.postId);
+                allPosts.push({
+                  ...post,
+                  isRepost: true,
+                  repostedBy: usernameMap.get(repostData.userId) || "Someone",
+                  repostedById: repostData.userId,
+                  repostedAt: repostData.createdAt?.toDate?.() || new Date(),
+                });
+              }
+            }
+          } catch (error) {
+            console.log(`[PostsService] Could not fetch reposted post ${repostData.postId}`);
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Sort by date (original posts use createdAt, reposts use repostedAt)
+  allPosts.sort((a, b) => {
+    const dateA = a.isRepost && a.repostedAt ? a.repostedAt : a.createdAt;
+    const dateB = b.isRepost && b.repostedAt ? b.repostedAt : b.createdAt;
+    return dateB.getTime() - dateA.getTime();
+  });
+
+  return allPosts.slice(0, postLimit);
 }
 
 function calculateHotScore(post) {

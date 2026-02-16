@@ -13,6 +13,7 @@ import {
   createPost,
   subscribeToUserPosts,
   getUserOriginalPosts,
+  getUserPostsWithReposts,
   getUserReplies,
   getUserMediaPosts,
   getUserLikedPosts,
@@ -20,6 +21,8 @@ import {
   removeThumbsUp,
   thumbsDownPost,
   removeThumbsDown,
+  repost,
+  unrepost,
   deletePost,
   subscribeToComments,
   addComment,
@@ -316,7 +319,8 @@ function ProfilePage() {
         let data = [];
         switch (activeTab) {
           case 'posts':
-            data = await getUserOriginalPosts(targetUserId);
+            // Include reposts in the posts tab
+            data = await getUserPostsWithReposts(targetUserId);
             break;
           case 'replies':
             data = await getUserReplies(targetUserId);
@@ -328,7 +332,7 @@ function ProfilePage() {
             data = await getUserLikedPosts(targetUserId);
             break;
           default:
-            data = await getUserOriginalPosts(targetUserId);
+            data = await getUserPostsWithReposts(targetUserId);
         }
         setPosts(data);
       } catch (error) {

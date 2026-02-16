@@ -12,6 +12,9 @@ import {
   removeThumbsUp,
   thumbsDownPost,
   removeThumbsDown,
+  repost,
+  unrepost,
+  hasUserRepostedPost,
   deletePost,
   subscribeToComments,
   addComment,
@@ -116,15 +119,19 @@ function PostCard({
   onComment,
   onDelete,
   onShare,
+  onRepost,
   onUserClick,
   onPostPress,
   showReplyContext = true,
+  hasReposted = false,
+  showRepostedBy = false,
 }) {
   const hasThumbsUp = (post.thumbsUp || []).includes(currentUserId);
   const hasThumbsDown = (post.thumbsDown || []).includes(currentUserId);
   const isOwner = post.userId === currentUserId;
   const avatarColor = COLOR_MAP[post.userAvatarColor || "green"] || COLOR_MAP.green;
   const replyCount = post.commentsCount || post.metrics?.repliesCount || 0;
+  const repostCount = post.repostsCount || post.metrics?.repostsCount || 0;
 
   const handlePostClick = (e) => {
     // Don't trigger if clicking on buttons or links
@@ -138,6 +145,15 @@ function PostCard({
 
   return (
     <article className="x-post" onClick={handlePostClick} style={{ cursor: "pointer" }}>
+      {/* Reposted by label */}
+      {showRepostedBy && post.isRepost && post.repostedBy && (
+        <div className="x-repost-label">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"/>
+          </svg>
+          <span>@{post.repostedBy} reposted</span>
+        </div>
+      )}
       {/* Reply context */}
       {showReplyContext && post.replyToPostId && post.replyToUsername && (
         <div className="x-reply-context">
@@ -202,6 +218,12 @@ function PostCard({
               <path fill="currentColor" d="M1.751 10c0-4.42 3.584-8 8.005-8h4.366c4.49 0 8.129 3.64 8.129 8.13 0 2.96-1.607 5.68-4.196 7.11l-8.054 4.46v-3.69h-.067c-4.49.1-8.183-3.51-8.183-8.01zm8.005-6c-3.317 0-6.005 2.69-6.005 6 0 3.37 2.77 6.08 6.138 6.01l.351-.01h1.761v2.3l5.087-2.81c1.951-1.08 3.163-3.13 3.163-5.36 0-3.39-2.744-6.13-6.129-6.13H9.756z"/>
             </svg>
             {replyCount > 0 && <span>{formatCount(replyCount)}</span>}
+          </button>
+          <button className={`x-action x-action-repost ${hasReposted ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); onRepost && onRepost(); }}>
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="currentColor" d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"/>
+            </svg>
+            {repostCount > 0 && <span>{formatCount(repostCount)}</span>}
           </button>
           <button className={`x-action x-action-like ${hasThumbsUp ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); onThumbsUp(); }}>
             <svg viewBox="0 0 24 24" width="18" height="18">
@@ -607,6 +629,9 @@ export default function FeedPage() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [sharePost, setSharePost] = useState(null);
 
+  // Track which posts the user has reposted
+  const [userReposts, setUserReposts] = useState(new Set());
+
   // Load friends
   useEffect(() => {
     if (!user?.uid) return;
@@ -662,6 +687,63 @@ export default function FeedPage() {
   const updatePostInFeeds = (postId, updater) => {
     setFriendsFeedPosts((prev) => prev.map((p) => (p.id === postId ? updater(p) : p)));
     setDiscoverPosts((prev) => prev.map((p) => (p.id === postId ? updater(p) : p)));
+  };
+
+  const handleRepost = async (post) => {
+    if (!user?.uid) return;
+
+    // Don't allow reposting your own posts
+    if ((post.authorId || post.userId) === user.uid) {
+      alert("You can't repost your own post.");
+      return;
+    }
+
+    const hasReposted = userReposts.has(post.id);
+
+    // Optimistic update
+    setUserReposts((prev) => {
+      const newSet = new Set(prev);
+      if (hasReposted) {
+        newSet.delete(post.id);
+      } else {
+        newSet.add(post.id);
+      }
+      return newSet;
+    });
+
+    updatePostInFeeds(post.id, (p) => ({
+      ...p,
+      repostsCount: hasReposted
+        ? Math.max(0, (p.repostsCount || 0) - 1)
+        : (p.repostsCount || 0) + 1,
+      metrics: {
+        ...p.metrics,
+        repostsCount: hasReposted
+          ? Math.max(0, (p.metrics?.repostsCount || 0) - 1)
+          : (p.metrics?.repostsCount || 0) + 1,
+      },
+    }));
+
+    try {
+      if (hasReposted) {
+        await unrepost(post.id, user.uid);
+      } else {
+        await repost(post.id, user.uid);
+      }
+    } catch (error) {
+      console.error("Error toggling repost:", error);
+      // Revert optimistic updates
+      setUserReposts((prev) => {
+        const newSet = new Set(prev);
+        if (hasReposted) {
+          newSet.add(post.id);
+        } else {
+          newSet.delete(post.id);
+        }
+        return newSet;
+      });
+      handleRefresh();
+    }
   };
 
   const handleThumbsUp = async (post) => {
@@ -922,7 +1004,10 @@ export default function FeedPage() {
                 onComment={() => openComments(post)}
                 onDelete={() => handleDeletePost(post)}
                 onShare={() => handleShare(post)}
+                onRepost={() => handleRepost(post)}
                 onUserClick={handleUserClick}
+                hasReposted={userReposts.has(post.id)}
+                showRepostedBy={feedTab === "friends"}
               />
             ))
           )}
