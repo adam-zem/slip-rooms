@@ -225,8 +225,8 @@
 
 .active-room-card {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
   width: 100%;
   padding: 12px 16px;
   background: rgba(255, 255, 255, 0.03);
@@ -234,6 +234,24 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.active-room-card .team-color-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.active-room-card .room-name {
+  flex: 1;
+  text-align: left;
+}
+
+.active-room-card .room-users {
+  color: #047857;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .active-room-card:hover {

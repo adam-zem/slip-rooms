@@ -117,6 +117,7 @@ export async function sendMessage(roomId, message) {
     timestamp: serverTimestamp(),
     userId: message.userId || null,
     type: message.type || "text", // text, image, gif
+    displayBadge: message.displayBadge || null, // Badge to show next to username
   };
 
   // Add type-specific fields

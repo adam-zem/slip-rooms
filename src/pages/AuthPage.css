@@ -301,6 +301,30 @@
   margin: 0 auto;
 }
 
+.auth-legal-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.auth-legal-links a {
+  color: rgba(136, 136, 136, 0.7);
+  font-size: 11px;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.auth-legal-links a:hover {
+  color: var(--matrix-green);
+}
+
+.auth-legal-links span {
+  color: rgba(136, 136, 136, 0.5);
+  font-size: 11px;
+}
+
 /* ===============================
    RESPONSIVE
    =============================== */

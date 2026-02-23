@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Create Demo Account - SlipRooms</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      padding: 40px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { color: #047857; }
+    .status {
+      background: #141414;
+      padding: 16px;
+      border-radius: 8px;
+      margin: 16px 0;
+      border: 1px solid #222;
+    }
+    .success { border-color: #047857; color: #047857; }
+    .error { border-color: #ef4444; color: #ef4444; }
+    .info { color: #888; }
+    button {
+      background: #047857;
+      color: #fff;
+      border: none;
+      padding: 16px 32px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:hover { background: #059669; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    pre {
+      background: #1a1a1a;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Create Demo Account for App Store Review</h1>
+
+  <div class="status info">
+    <strong>Account Details:</strong>
+    <pre>Email: demo@sliprooms.com
+Password: SlipRooms2026!
+Handle: @appreview
+Display Name: AppReviewer</pre>
+  </div>
+
+  <button id="createBtn" onclick="createDemoAccount()">Create Demo Account</button>
+
+  <div id="log"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDQXCKVagyRi1OhhgjyPgZxoBuPVRD_R8Y",
+      authDomain: "sliprooms-279e3.firebaseapp.com",
+      projectId: "sliprooms-279e3",
+      storageBucket: "sliprooms-279e3.firebasestorage.app",
+      messagingSenderId: "646844776858",
+      appId: "1:646844776858:web:f2ed004f7205318742fa23"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    function log(message, isError = false, isSuccess = false) {
+      const logDiv = document.getElementById('log');
+      const div = document.createElement('div');
+      div.className = 'status ' + (isError ? 'error' : isSuccess ? 'success' : 'info');
+      div.innerHTML = message;
+      logDiv.appendChild(div);
+    }
+
+    window.createDemoAccount = async function() {
+      const btn = document.getElementById('createBtn');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+
+      const email = 'demo@sliprooms.com';
+      const password = 'SlipRooms2026!';
+      const username = 'appreview';
+      const displayName = 'AppReviewer';
+
+      try {
+        // Check if username is already taken
+        log('Checking if username is available...');
+        const usernameDoc = await getDoc(doc(db, 'usernames', username));
+
+        if (usernameDoc.exists()) {
+          // Username exists, try to sign in instead
+          log('Username already exists. Trying to sign in to verify account...');
+          try {
+            await signInWithEmailAndPassword(auth, email, password);
+            log('<strong>Demo account already exists and is working!</strong>', false, true);
+            log('You can use these credentials to log in:<br><pre>Email: demo@sliprooms.com\nPassword: SlipRooms2026!</pre>', false, true);
+            btn.textContent = 'Account Ready!';
+            return;
+          } catch (signInError) {
+            log('Account may exist with different password. Error: ' + signInError.message, true);
+            btn.disabled = false;
+            btn.textContent = 'Try Again';
+            return;
+          }
+        }
+
+        // Create the Firebase Auth user
+        log('Creating Firebase Auth user...');
+        const { user } = await createUserWithEmailAndPassword(auth, email, password);
+        log('Auth user created with UID: ' + user.uid, false, true);
+
+        // Create user profile document
+        log('Creating user profile in Firestore...');
+        await setDoc(doc(db, 'users', user.uid), {
+          username: username,
+          displayName: displayName,
+          email: email,
+          bio: 'App Store Review Account',
+          avatarEmoji: '🔥',
+          avatarColor: 'green',
+          profilePicture: null,
+          isAdmin: false,
+          isPublic: true,
+          createdAt: serverTimestamp(),
+          agreedToTerms: true,
+          agreedAt: serverTimestamp(),
+        });
+        log('User profile created!', false, true);
+
+        // Reserve the username
+        log('Reserving username...');
+        await setDoc(doc(db, 'usernames', username), {
+          userId: user.uid,
+          username: username,
+          createdAt: new Date().toISOString(),
+        });
+        log('Username reserved!', false, true);
+
+        // Award Rookie badge
+        log('Awarding Rookie badge...');
+        const badgeId = 'rookie';
+        await setDoc(doc(db, 'users', user.uid, 'badges', badgeId), {
+          badgeId: badgeId,
+          awardedAt: serverTimestamp(),
+          source: 'signup',
+        });
+
+        // Set as display badge
+        await setDoc(doc(db, 'users', user.uid), {
+          displayBadge: badgeId,
+        }, { merge: true });
+        log('Rookie badge awarded!', false, true);
+
+        log('<strong>Demo account created successfully!</strong>', false, true);
+        log('<pre>Email: demo@sliprooms.com\nPassword: SlipRooms2026!\nHandle: @appreview</pre>', false, true);
+
+        btn.textContent = 'Account Created!';
+
+      } catch (error) {
+        console.error('Error:', error);
+        if (error.code === 'auth/email-already-in-use') {
+          log('Email already in use. Trying to sign in...', false);
+          try {
+            await signInWithEmailAndPassword(auth, email, password);
+            log('<strong>Demo account already exists and credentials work!</strong>', false, true);
+            btn.textContent = 'Account Ready!';
+          } catch (e) {
+            log('Email exists but password may be different. Error: ' + e.message, true);
+            btn.disabled = false;
+            btn.textContent = 'Try Again';
+          }
+        } else {
+          log('Error: ' + error.message, true);
+          btn.disabled = false;
+          btn.textContent = 'Try Again';
+        }
+      }
+    };
+  </script>
+</body>
+</html>

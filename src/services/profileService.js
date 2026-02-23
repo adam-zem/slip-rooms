@@ -12,7 +12,6 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { calculateLevel, getLevelTitle, getLevelProgress, getXPForNextLevel } from "./xpService";
 import { getFriendCount } from "./friendsService";
 import { getHitCount } from "./greatestHitsService";
 
@@ -32,8 +31,6 @@ export async function getProfile(userId) {
     }
 
     const data = userSnap.data();
-    const xp = data.xp || 0;
-    const level = calculateLevel(xp);
 
     // Get additional counts - wrap in try/catch to avoid failures
     let friendCount = 0;
@@ -51,6 +48,7 @@ export async function getProfile(userId) {
     return {
       id: userId,
       username: data.username || "Unknown",
+      displayName: data.displayName || data.username || "Unknown",
       email: data.email || "",
       bio: data.bio || "",
       avatarEmoji: data.avatarEmoji || "🔥",
@@ -58,11 +56,7 @@ export async function getProfile(userId) {
       favoriteMarket: data.favoriteMarket || "NFL",
       publicProfile: data.publicProfile !== false, // Default true
       profilePicture: data.profilePicture || null,
-      xp,
-      level,
-      title: getLevelTitle(level),
-      progress: getLevelProgress(xp),
-      nextLevelXP: getXPForNextLevel(level),
+      displayBadge: data.displayBadge || null,
       totalMessages: data.totalMessages || 0,
       friendCount,
       hitCount,
@@ -184,7 +178,7 @@ export async function searchUsers(searchTerm, currentUserId, maxResults = 10) {
           avatarEmoji: data.avatarEmoji || "🔥",
           avatarColor: data.avatarColor || "green",
           profilePicture: data.profilePicture || null,
-          level: calculateLevel(data.xp || 0),
+          displayBadge: data.displayBadge || null,
         });
       }
     }

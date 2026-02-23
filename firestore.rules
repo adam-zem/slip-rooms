@@ -36,14 +36,24 @@ service cloud.firestore {
       allow update: if isAdmin();
       // Only admins can delete user profiles
       allow delete: if isAdmin();
+
+      // Badges subcollection
+      match /badges/{badgeId} {
+        // Anyone authenticated can read badges (for profile viewing)
+        allow read: if request.auth != null;
+        // Users can only write their own badges
+        allow create, update: if request.auth != null && request.auth.uid == userId;
+        // Only admins can delete badges
+        allow delete: if isAdmin();
+      }
     }
 
     // Rooms collection
     match /rooms/{roomId} {
       // Any authenticated user can read rooms
       allow read: if request.auth != null;
-      // Only admins can create rooms
-      allow create: if isAdmin();
+      // Any authenticated user can create rooms
+      allow create: if request.auth != null;
       // Any authenticated user can update (for userCount/presence tracking)
       allow update: if request.auth != null;
       // Only admins can delete rooms

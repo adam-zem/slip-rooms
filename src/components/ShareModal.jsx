@@ -225,7 +225,6 @@ export default function ShareModal({
                     </div>
                     <div className="friend-info">
                       <span className="friend-name">{friend.username}</span>
-                      <span className="friend-level">Lv. {friend.level || 1}</span>
                     </div>
                     {selectedFriend?.id === friend.id && sending ? (
                       <div className="friend-loading-spinner"></div>

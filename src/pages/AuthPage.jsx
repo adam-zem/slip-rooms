@@ -437,6 +437,11 @@ export default function AuthPage() {
             This is NOT a gambling platform. We do not accept bets, process wagers,
             or handle any real money transactions.
           </p>
+          <div className="auth-legal-links">
+            <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <span>·</span>
+            <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          </div>
         </footer>
       </div>
     );
@@ -518,6 +523,11 @@ export default function AuthPage() {
             This is NOT a gambling platform. We do not accept bets, process wagers,
             or handle any real money transactions.
           </p>
+          <div className="auth-legal-links">
+            <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <span>·</span>
+            <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          </div>
         </footer>
       </div>
     );
@@ -610,6 +620,11 @@ export default function AuthPage() {
             This is NOT a gambling platform. We do not accept bets, process wagers,
             or handle any real money transactions.
           </p>
+          <div className="auth-legal-links">
+            <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <span>·</span>
+            <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          </div>
         </footer>
       </div>
     );
@@ -819,6 +834,11 @@ export default function AuthPage() {
           are for discussion purposes only. Please gamble responsibly through
           licensed sportsbooks. You must be 18 years or older to use this app.
         </p>
+        <div className="auth-legal-links">
+          <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+          <span>·</span>
+          <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+        </div>
       </footer>
     </div>
   );

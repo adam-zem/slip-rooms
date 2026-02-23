@@ -17,6 +17,8 @@ import {
   Timestamp,
   getDocs,
   writeBatch,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -344,7 +346,7 @@ export async function updateRoomActivity(roomId) {
 }
 
 /**
- * Update user count for a room
+ * Update user count for a room (legacy - use joinRoom/leaveRoom instead)
  */
 export async function updateRoomUserCount(roomId, delta) {
   const roomRef = doc(db, "rooms", roomId);
@@ -355,6 +357,123 @@ export async function updateRoomUserCount(roomId, delta) {
     });
   } catch (error) {
     console.error("Error updating user count:", error);
+  }
+}
+
+/**
+ * Join a room - adds user to activeUsers array
+ * This provides proper participant tracking with grace period support
+ * @param {string} roomId - The room to join
+ * @param {string} userId - The user joining
+ */
+export async function joinRoom(roomId, userId) {
+  if (!roomId || !userId) return;
+
+  const roomRef = doc(db, "rooms", roomId);
+  try {
+    await updateDoc(roomRef, {
+      activeUsers: arrayUnion(userId),
+      userCount: increment(1),
+      lastActivity: serverTimestamp(),
+    });
+  } catch (error) {
+    // Room might have been deleted
+    if (error.code === "not-found" || error.code === "permission-denied") {
+      console.log("[joinRoom] Room not found or no permission:", roomId);
+    } else {
+      console.error("[joinRoom] Error:", error);
+    }
+  }
+}
+
+/**
+ * Leave a room - removes user from activeUsers array
+ * Gracefully handles deleted rooms
+ * @param {string} roomId - The room to leave
+ * @param {string} userId - The user leaving
+ */
+export async function leaveRoom(roomId, userId) {
+  if (!roomId || !userId) return;
+
+  const roomRef = doc(db, "rooms", roomId);
+  try {
+    await updateDoc(roomRef, {
+      activeUsers: arrayRemove(userId),
+      userCount: increment(-1),
+      lastActivity: serverTimestamp(),
+    });
+  } catch (error) {
+    // Silently handle errors - room might have been deleted
+    // This is expected during logout or when rooms are cleaned up
+    if (error.code === "not-found" || error.code === "permission-denied") {
+      // Expected - room was deleted or user logged out
+    } else {
+      console.error("[leaveRoom] Error:", error);
+    }
+  }
+}
+
+/**
+ * Find duplicate rooms (rooms with same gameId, stat, line, direction)
+ * Useful for cleanup
+ */
+export async function findDuplicateRooms() {
+  try {
+    const q = query(collection(db, "rooms"));
+    const snapshot = await getDocs(q);
+
+    const roomsByKey = {};
+    const duplicates = [];
+
+    snapshot.docs.forEach(docSnap => {
+      const room = { id: docSnap.id, ...docSnap.data() };
+      const key = `${room.gameId}_${room.stat}_${room.line}_${room.direction}`;
+
+      if (!roomsByKey[key]) {
+        roomsByKey[key] = room;
+      } else {
+        // This is a duplicate - keep the one with more users
+        const existing = roomsByKey[key];
+        if ((room.userCount || 0) > (existing.userCount || 0)) {
+          duplicates.push(existing);
+          roomsByKey[key] = room;
+        } else {
+          duplicates.push(room);
+        }
+      }
+    });
+
+    return duplicates;
+  } catch (error) {
+    console.error("[findDuplicateRooms] Error:", error);
+    return [];
+  }
+}
+
+/**
+ * Clean up duplicate rooms - keeps the room with most users
+ */
+export async function cleanupDuplicateRooms() {
+  try {
+    const duplicates = await findDuplicateRooms();
+
+    if (duplicates.length === 0) {
+      console.log("[cleanupDuplicateRooms] No duplicates found");
+      return { deleted: 0 };
+    }
+
+    const batch = writeBatch(db);
+    duplicates.forEach(room => {
+      batch.delete(doc(db, "rooms", room.id));
+    });
+
+    await batch.commit();
+    console.log(`[cleanupDuplicateRooms] Deleted ${duplicates.length} duplicate rooms`);
+
+    return { deleted: duplicates.length };
+  } catch (error) {
+    console.error("[cleanupDuplicateRooms] Error:", error);
+    throw error;
   }
 }
 
@@ -844,6 +963,10 @@ export default {
   subscribeToGameRooms,
   updateRoomActivity,
   updateRoomUserCount,
+  joinRoom,
+  leaveRoom,
+  findDuplicateRooms,
+  cleanupDuplicateRooms,
   searchRooms,
   getBettingCategories,
   archiveRoomsForGame,

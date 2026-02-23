@@ -1,0 +1,29 @@
+/* TinyBadge.css - Small inline badge next to usernames */
+
+.tiny-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  border-radius: 20% 20% 50% 50%;
+  flex-shrink: 0;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+/* Rookie badge - emerald */
+.tiny-badge.rookie {
+  background-color: #047857;
+  border: 1px solid #10b981;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+/* Founding Father badge - gold */
+.tiny-badge.ff {
+  background: linear-gradient(180deg, #1c1917 0%, #292524 100%);
+  border: 1.5px solid #f59e0b;
+  color: #fbbf24;
+  font-family: Georgia, 'Times New Roman', serif;
+  box-shadow: 0 0 4px rgba(251, 191, 36, 0.3);
+}

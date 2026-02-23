@@ -13,7 +13,6 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { awardXP, XP_REWARDS } from "./xpService";
 
 /**
  * Send a friend request
@@ -82,9 +81,6 @@ export async function acceptFriendRequest(requestId) {
     }),
     // Delete the request
     deleteDoc(requestRef),
-    // Award XP to both users
-    awardXP(from, XP_REWARDS.FRIEND_ADDED, "friend_added"),
-    awardXP(to, XP_REWARDS.FRIEND_ADDED, "friend_added"),
   ]);
 
   return { from, to };
@@ -160,10 +156,10 @@ export async function getPendingRequests(userId) {
       id: docSnap.id,
       ...data,
       fromUsername: senderData.username || "Unknown",
+      fromDisplayName: senderData.displayName || senderData.username || "Unknown",
       fromAvatar: senderData.avatarEmoji || "🔥",
       fromProfilePic: senderData.profilePicture || null,
-      fromLevel: senderData.level || 1,
-      fromTitle: senderData.title || "Rookie",
+      fromDisplayBadge: senderData.displayBadge || null,
     });
   }
 
@@ -228,8 +224,7 @@ export async function getFriends(userId) {
         avatarEmoji: friendData.avatarEmoji || "🔥",
         avatarColor: friendData.avatarColor || "green",
         profilePicture: friendData.profilePicture || null,
-        xp: friendData.xp || 0,
-        level: friendData.level || 1,
+        displayBadge: friendData.displayBadge || null,
         bio: friendData.bio || "",
         createdAt: data.createdAt,
       });

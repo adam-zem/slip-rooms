@@ -12,7 +12,6 @@ import AdminPage from "./pages/AdminPage";
 import "./pages/GamePage.css"; // Keep styles for the modal
 import { useGames } from "./hooks/useGames";
 import { getPeriodLabel } from "./services/espnService";
-import { awardMessageXP, awardXP, XP_REWARDS } from "./services/xpService";
 import {
   createRoom as createRoomInFirestore,
   sendMessage as sendMessageToFirestore,
@@ -28,6 +27,7 @@ import {
   cleanupStalePresence,
 } from "./services/presenceService";
 import { submitRoom } from "./services/roomSubmissionsService";
+import TinyBadge from "./components/TinyBadge";
 import {
   subscribeToConversations,
   subscribeToMessages as subscribeToDMMessages,
@@ -73,6 +73,14 @@ import {
 } from "./services/accountService";
 import { getSortedSportsFromData } from "./services/sportRelevanceService";
 import ShareModal from "./components/ShareModal";
+import { getTeamColor, extractTeamFromRoomName } from "./utils/teamColors";
+import {
+  subscribeToNotifications,
+  subscribeToUnreadCount as subscribeToNotificationUnreadCount,
+  markAllAsRead as markAllNotificationsAsRead,
+  markAsRead as markNotificationAsRead,
+} from "./services/notificationService";
+import { getRecentRooms, addRecentRoom, removeRecentRoom } from "./services/recentRoomsService";
 
 
 
@@ -277,6 +285,14 @@ function App() {
   const [activeDMConversation, setActiveDMConversation] = useState(null);
   const [dmMessages, setDmMessages] = useState([]);
   const [dmInput, setDmInput] = useState("");
+
+  // Notifications state
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+
+  // Recent rooms state
+  const [recentRooms, setRecentRooms] = useState([]);
   const [dmFriends, setDmFriends] = useState([]);
   const [showNewDM, setShowNewDM] = useState(false);
   const dmMessagesEndRef = useRef(null);
@@ -407,11 +423,19 @@ function App() {
     return () => document.removeEventListener("click", handleClickOutside);
   }, [adminUserDropdown]);
 
-  // Load username from Firestore profile
+  // Load username and displayBadge from Firestore profile
   useEffect(() => {
     if (userProfile?.username) {
-      setProfile((prev) => ({ ...prev, displayName: userProfile.username }));
-      setDraftProfile((prev) => ({ ...prev, displayName: userProfile.username }));
+      setProfile((prev) => ({
+        ...prev,
+        displayName: userProfile.username,
+        displayBadge: userProfile.displayBadge || null,
+      }));
+      setDraftProfile((prev) => ({
+        ...prev,
+        displayName: userProfile.username,
+        displayBadge: userProfile.displayBadge || null,
+      }));
     }
   }, [userProfile]);
 
@@ -726,6 +750,49 @@ function App() {
     };
   }, [user?.uid]);
 
+  // Subscribe to notifications
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubNotifications = subscribeToNotifications(user.uid, (notifs) => {
+      setNotifications(notifs);
+    });
+
+    const unsubNotificationCount = subscribeToNotificationUnreadCount(user.uid, (count) => {
+      setNotificationUnreadCount(count);
+    });
+
+    return () => {
+      unsubNotifications();
+      unsubNotificationCount();
+    };
+  }, [user?.uid]);
+
+  // Load recent rooms on mount and when rooms change
+  useEffect(() => {
+    const loadRecentRooms = () => {
+      const recent = getRecentRooms();
+      setRecentRooms(recent);
+    };
+    loadRecentRooms();
+  }, []);
+
+  // Add to recent rooms when joining a room
+  useEffect(() => {
+    if (!activeRoomId || !activeRoom) return;
+
+    addRecentRoom({
+      id: activeRoom.id,
+      name: activeRoom.name,
+      gameName: activeRoom.gameName || activeRoom.game,
+      sport: activeRoom.sport,
+    });
+
+    // Refresh the recent rooms list
+    const recent = getRecentRooms();
+    setRecentRooms(recent);
+  }, [activeRoomId, activeRoom?.id]);
+
   // Subscribe to messages when a conversation is active
   useEffect(() => {
     if (!activeDMConversation) {
@@ -853,13 +920,6 @@ function App() {
 
       // Select the new room
       setActiveRoomId(newRoom.id);
-
-      // Award XP for creating a room
-      if (user?.uid) {
-        awardXP(user.uid, XP_REWARDS.CREATE_ROOM, "create_room").catch((err) =>
-          console.error("XP award failed:", err)
-        );
-      }
 
       // Reset modal
       setShowCreateRoom(false);
@@ -1029,14 +1089,8 @@ function App() {
         text,
         oddie: profile.avatarEmoji, // User's emoji/avatar
         userId: user?.uid || null,
+        displayBadge: profile.displayBadge || null,
       });
-
-      // Award XP for sending message (includes daily bonus check)
-      if (user?.uid) {
-        awardMessageXP(user.uid).catch((err) =>
-          console.error("XP award failed:", err)
-        );
-      }
     } catch (err) {
       console.error("Failed to send message:", err);
       // Restore message on error
@@ -1083,14 +1137,8 @@ function App() {
         username,
         oddie: profile.avatarEmoji,
         userId: user?.uid || null,
+        displayBadge: profile.displayBadge || null,
       });
-
-      // Award XP
-      if (user?.uid) {
-        awardMessageXP(user.uid).catch((err) =>
-          console.error("XP award failed:", err)
-        );
-      }
     } catch (err) {
       console.error("Failed to upload image:", err);
       alert(err.message || "Failed to upload image");
@@ -1150,14 +1198,8 @@ function App() {
         username,
         oddie: profile.avatarEmoji,
         userId: user?.uid || null,
+        displayBadge: profile.displayBadge || null,
       });
-
-      // Award XP
-      if (user?.uid) {
-        awardMessageXP(user.uid).catch((err) =>
-          console.error("XP award failed:", err)
-        );
-      }
     } catch (err) {
       console.error("Failed to send GIF:", err);
     }
@@ -1739,6 +1781,7 @@ function App() {
           userId: msgUserId, // Include userId for clickable usernames
           time,
           oddie: msg.oddie, // User's emoji
+          displayBadge: msg.displayBadge || null, // Badge to show next to username
           messages: [],
         };
         groups.push(current);
@@ -1822,6 +1865,12 @@ function App() {
               📬
               {dmUnreadCount > 0 && (
                 <span className="dm-badge">{dmUnreadCount > 9 ? "9+" : dmUnreadCount}</span>
+              )}
+            </button>
+            <button type="button" className="notification-btn" onClick={() => setShowNotifications(true)}>
+              🔔
+              {notificationUnreadCount > 0 && (
+                <span className="notification-badge">{notificationUnreadCount > 9 ? "9+" : notificationUnreadCount}</span>
               )}
             </button>
           </div>
@@ -1918,6 +1967,36 @@ function App() {
 
               <div className="mobile-dropdown-divider" />
 
+              <a
+                href="/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mobile-dropdown-item mobile-dropdown-link"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                🔒 Privacy Policy
+              </a>
+              <a
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mobile-dropdown-item mobile-dropdown-link"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                📜 Terms of Service
+              </a>
+              <a
+                href="/faq"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mobile-dropdown-item mobile-dropdown-link"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                ❓ FAQ
+              </a>
+
+              <div className="mobile-dropdown-divider" />
+
               <button
                 type="button"
                 className="mobile-dropdown-item mobile-dropdown-logout"
@@ -1973,6 +2052,49 @@ function App() {
           activeMarketId={activeMarketId}
         />
 
+        {/* Recent Rooms Section */}
+        {recentRooms.length > 0 && (
+          <>
+            <div className="rooms-header rooms-header-recent">
+              <h2>🕐 Recent</h2>
+            </div>
+            <ul className="rooms-list recent-rooms-list">
+              {recentRooms.slice(0, 5).map((room) => {
+                const isActive = room.id === activeRoomId;
+                const teamName = extractTeamFromRoomName(room.name);
+                const teamColor = teamName ? getTeamColor(teamName, room.sport) : "#666";
+                return (
+                  <li
+                    key={room.id}
+                    className={isActive ? "room active" : "room"}
+                    onClick={() => handleRoomSelect(room.id)}
+                  >
+                    <div className="room-info">
+                      <div className="room-name-row">
+                        <span className="team-color-dot" style={{ backgroundColor: teamColor }}></span>
+                        <span className="room-name">{room.name}</span>
+                      </div>
+                      <div className="room-game">{room.gameName}</div>
+                    </div>
+                    <button
+                      type="button"
+                      className="room-remove-recent-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRecentRoom(room.id);
+                        setRecentRooms(getRecentRooms());
+                      }}
+                      title="Remove from recent"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+
         {/* Trending Rooms Section (Heat Map) */}
         <div className="rooms-header">
           <h2>🔥 Trending</h2>
@@ -1988,6 +2110,8 @@ function App() {
           <ul className="rooms-list trending-rooms">
             {trendingRooms.map((room) => {
               const isActive = room.id === activeRoomId;
+              const teamName = extractTeamFromRoomName(room.name);
+              const teamColor = teamName ? getTeamColor(teamName, room.sport) : "#666";
               return (
                 <li
                   key={room.id}
@@ -1995,7 +2119,10 @@ function App() {
                   onClick={() => handleRoomSelect(room.id)}
                 >
                   <div className="room-info">
-                    <div className="room-name">{room.name}</div>
+                    <div className="room-name-row">
+                      <span className="team-color-dot" style={{ backgroundColor: teamColor }}></span>
+                      <span className="room-name">{room.name}</span>
+                    </div>
                     <div className="room-game">{room.gameName}</div>
                     <div className="room-users trending-count">
                       🔥 {room.userCount || 0} sweating
@@ -2039,6 +2166,8 @@ function App() {
             <ul className="rooms-list">
               {activeMarket.rooms.map((room) => {
                 const isActive = room.id === activeRoomId;
+                const teamName = extractTeamFromRoomName(room.name);
+                const teamColor = teamName ? getTeamColor(teamName, room.sport) : "#666";
                 return (
                   <li
                     key={room.id}
@@ -2046,7 +2175,10 @@ function App() {
                     onClick={() => handleRoomSelect(room.id)}
                   >
                     <div className="room-info">
-                      <div className="room-name">{room.name}</div>
+                      <div className="room-name-row">
+                        <span className="team-color-dot" style={{ backgroundColor: teamColor }}></span>
+                        <span className="room-name">{room.name}</span>
+                      </div>
                       <div className="room-game">{room.game}</div>
                       <div className="room-odds">{room.odds}</div>
                       <div className="room-users">
@@ -2069,6 +2201,17 @@ function App() {
             </ul>
           </>
         )}
+
+        {/* Footer Links */}
+        <div className="sidebar-footer">
+          <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
+          <span className="footer-divider">·</span>
+          <a href="/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+          <span className="footer-divider">·</span>
+          <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
+          <span className="footer-divider">·</span>
+          <a href="mailto:support@sliprooms.com?subject=SlipRooms%20Support">Contact</a>
+        </div>
       </aside>
 
       {/* Chat */}
@@ -2083,6 +2226,7 @@ function App() {
             <div className="chat-top">
               <div className="chat-header">
                 <div className="chat-header-top">
+                  <span className="team-color-dot chat-header-dot" style={{ backgroundColor: getTeamColor(extractTeamFromRoomName(activeRoom.name), activeRoom.sport) }}></span>
                   <h2>{activeRoom.name}</h2>
                   <span className="chat-tag">Straight · 1-leg</span>
                   <button
@@ -2133,6 +2277,7 @@ function App() {
                     >
                       {cluster.user}
                     </span>
+                    {cluster.displayBadge && <TinyBadge badgeId={cluster.displayBadge} size={16} />}
                     <span className="message-timestamp">{cluster.time}</span>
                   </div>
 
@@ -2370,13 +2515,7 @@ function App() {
                     >
                       <div className="game-card-row">
                         <div className="game-card-team">
-                          {game.awayTeam?.logo && (
-                            <img
-                              src={game.awayTeam.logo}
-                              alt={game.awayTeam.name}
-                              className="game-card-logo"
-                            />
-                          )}
+                          <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.awayTeam?.name, activeMarketId) }}></span>
                           <span className="game-card-abbr">{game.awayTeam?.name}</span>
                         </div>
                         <span className="game-card-score">{game.awayTeam?.score}</span>
@@ -2386,13 +2525,7 @@ function App() {
                       </div>
                       <div className="game-card-row">
                         <div className="game-card-team">
-                          {game.homeTeam?.logo && (
-                            <img
-                              src={game.homeTeam.logo}
-                              alt={game.homeTeam.name}
-                              className="game-card-logo"
-                            />
-                          )}
+                          <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.homeTeam?.name, activeMarketId) }}></span>
                           <span className="game-card-abbr">{game.homeTeam?.name}</span>
                         </div>
                         <span className="game-card-score">{game.homeTeam?.score}</span>
@@ -2460,24 +2593,12 @@ function App() {
                     </div>
                     <div className="upcoming-matchup">
                       <div className="upcoming-team">
-                        {game.awayTeam?.logo && (
-                          <img
-                            src={game.awayTeam.logo}
-                            alt={game.awayTeam.name}
-                            className="game-card-logo"
-                          />
-                        )}
+                        <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.awayTeam?.name, activeMarketId) }}></span>
                         <span>{game.awayTeam?.name}</span>
                       </div>
                       <span className="upcoming-at">@</span>
                       <div className="upcoming-team">
-                        {game.homeTeam?.logo && (
-                          <img
-                            src={game.homeTeam.logo}
-                            alt={game.homeTeam.name}
-                            className="game-card-logo"
-                          />
-                        )}
+                        <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.homeTeam?.name, activeMarketId) }}></span>
                         <span>{game.homeTeam?.name}</span>
                       </div>
                     </div>
@@ -2526,13 +2647,7 @@ function App() {
                     >
                       <div className="game-card-row">
                         <div className="game-card-team">
-                          {game.awayTeam?.logo && (
-                            <img
-                              src={game.awayTeam.logo}
-                              alt={game.awayTeam.name}
-                              className="game-card-logo"
-                            />
-                          )}
+                          <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.awayTeam?.name, activeMarketId) }}></span>
                           <span className="game-card-abbr">{game.awayTeam?.name}</span>
                         </div>
                         <span className="game-card-score">{game.awayTeam?.score}</span>
@@ -2540,13 +2655,7 @@ function App() {
                       </div>
                       <div className="game-card-row">
                         <div className="game-card-team">
-                          {game.homeTeam?.logo && (
-                            <img
-                              src={game.homeTeam.logo}
-                              alt={game.homeTeam.name}
-                              className="game-card-logo"
-                            />
-                          )}
+                          <span className="game-card-dot" style={{ backgroundColor: getTeamColor(game.homeTeam?.name, activeMarketId) }}></span>
                           <span className="game-card-abbr">{game.homeTeam?.name}</span>
                         </div>
                         <span className="game-card-score">{game.homeTeam?.score}</span>
@@ -2880,6 +2989,75 @@ function App() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* NOTIFICATIONS MODAL */}
+    {showNotifications && (
+      <div
+        className="modal-overlay dm-overlay"
+        onClick={(e) => e.target === e.currentTarget && setShowNotifications(false)}
+      >
+        <div className="dm-inbox notifications-inbox">
+          <div className="dm-inbox-header">
+            <h2>Notifications</h2>
+            <button className="dm-close" onClick={() => setShowNotifications(false)}>×</button>
+          </div>
+
+          {notificationUnreadCount > 0 && (
+            <button
+              className="notifications-mark-read-btn"
+              onClick={() => {
+                markAllNotificationsAsRead(user.uid);
+              }}
+            >
+              Mark all as read
+            </button>
+          )}
+
+          {notifications.length === 0 ? (
+            <div className="dm-empty">
+              <span>🔔</span>
+              <p>No notifications</p>
+              <p className="dm-empty-sub">You're all caught up!</p>
+            </div>
+          ) : (
+            <div className="notifications-list">
+              {notifications.map((notif) => (
+                <div
+                  key={notif.id}
+                  className={`notification-item ${!notif.read ? "unread" : ""}`}
+                  onClick={() => {
+                    if (!notif.read) {
+                      markNotificationAsRead(notif.id);
+                    }
+                    // Could navigate to post here if needed
+                  }}
+                >
+                  <div className="notification-avatar">
+                    {notif.fromProfilePicture ? (
+                      <img src={notif.fromProfilePicture} alt={notif.fromUsername} />
+                    ) : (
+                      <span className={`notification-emoji notification-avatar-${notif.fromAvatarColor || 'green'}`}>
+                        {notif.fromAvatar || "🔥"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="notification-content">
+                    <p className="notification-message">{notif.message}</p>
+                    {notif.postText && (
+                      <p className="notification-post-preview">"{notif.postText.substring(0, 60)}..."</p>
+                    )}
+                    <span className="notification-time">{formatDMTime(notif.createdAt)}</span>
+                  </div>
+                  {notif.type === "like" && <span className="notification-type-icon">👍</span>}
+                  {notif.type === "reply" && <span className="notification-type-icon">💬</span>}
+                  {notif.type === "mention" && <span className="notification-type-icon">@</span>}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -3498,7 +3676,10 @@ function App() {
               <div className="game-active-rooms">
                 <h3 className="active-rooms-title">🔥 Active Rooms</h3>
                 <div className="active-rooms-list">
-                  {gameRoomsForModal.slice(0, 10).map((room) => (
+                  {gameRoomsForModal.slice(0, 10).map((room) => {
+                    const teamName = extractTeamFromRoomName(room.name);
+                    const teamColor = teamName ? getTeamColor(teamName, room.sport) : "#666";
+                    return (
                     <div key={room.id} className="active-room-card-wrapper">
                       <button
                         className="active-room-card"
@@ -3508,6 +3689,7 @@ function App() {
                           if (isMobile) setMobileView("chat");
                         }}
                       >
+                        <span className="team-color-dot" style={{ backgroundColor: teamColor }}></span>
                         <span className="room-name">{room.name}</span>
                         <span className="room-users">{room.userCount || 0} sweating</span>
                       </button>
@@ -3530,7 +3712,8 @@ function App() {
                         </button>
                       )}
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               </div>
             )}

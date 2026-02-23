@@ -10,6 +10,7 @@ import {
   joinOrCreateRoom,
   subscribeToGameRooms,
 } from "../services/roomService";
+import { getTeamColor, extractTeamFromRoomName } from "../utils/teamColors";
 import {
   getPlayersForCategory,
   getTeamsForGame,
@@ -333,18 +334,23 @@ export default function GamePage() {
         <div className="game-active-rooms">
           <h3 className="active-rooms-title">🔥 Active Rooms</h3>
           <div className="active-rooms-list">
-            {gameRooms.slice(0, 5).map((room) => (
-              <button
-                key={room.id}
-                className="active-room-card"
-                onClick={() => navigate(`/?room=${room.id}`)}
-              >
-                <span className="room-name">{room.name}</span>
-                <span className="room-users">
-                  {room.userCount || 0} sweating
-                </span>
-              </button>
-            ))}
+            {gameRooms.slice(0, 5).map((room) => {
+              const teamName = extractTeamFromRoomName(room.name);
+              const teamColor = teamName ? getTeamColor(teamName, room.sport) : "#666";
+              return (
+                <button
+                  key={room.id}
+                  className="active-room-card"
+                  onClick={() => navigate(`/?room=${room.id}`)}
+                >
+                  <span className="team-color-dot" style={{ backgroundColor: teamColor }}></span>
+                  <span className="room-name">{room.name}</span>
+                  <span className="room-users">
+                    {room.userCount || 0} sweating
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}

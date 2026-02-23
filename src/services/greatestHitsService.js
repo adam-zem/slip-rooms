@@ -14,7 +14,6 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { awardXP, XP_REWARDS } from "./xpService";
 
 /**
  * Add a greatest hit (bet slip screenshot)
@@ -35,9 +34,6 @@ export async function addGreatestHit(userId, hitData) {
     payout: hitData.payout || "",
     createdAt: serverTimestamp(),
   });
-
-  // Award XP for uploading
-  await awardXP(userId, XP_REWARDS.UPLOAD_GREATEST_HIT, "greatest_hit_upload");
 
   return newHit.id;
 }

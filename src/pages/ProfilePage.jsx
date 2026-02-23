@@ -28,6 +28,9 @@ import {
   addComment,
 } from "../services/postsService";
 import ShareModal from "../components/ShareModal";
+import BadgeModal from "../components/BadgeModal";
+import TinyBadge from "../components/TinyBadge";
+import { ensureRookieBadge, ensureFoundingFatherBadge } from "../services/badgeService";
 import "./ProfilePage.css";
 
 // Avatar colors
@@ -39,14 +42,6 @@ const COLOR_MAP = {
   red: "#ef4444",
   pink: "#ec4899",
 };
-
-function getLevelEmoji(level) {
-  if (level >= 20) return "👑";
-  if (level >= 15) return "🔥";
-  if (level >= 10) return "⭐";
-  if (level >= 5) return "💪";
-  return "🐣";
-}
 
 function formatTimeAgo(date) {
   const now = new Date();
@@ -282,6 +277,9 @@ function ProfilePage() {
   const [uploadData, setUploadData] = useState({ caption: "", sport: "nfl", odds: "", payout: "" });
   const [uploading, setUploading] = useState(false);
 
+  // Badge modal
+  const [showBadges, setShowBadges] = useState(false);
+
   const profilePicRef = useRef(null);
   const hitFileRef = useRef(null);
 
@@ -310,6 +308,14 @@ function ProfilePage() {
     if (targetUserId) loadProfile();
     else setLoading(false);
   }, [targetUserId, user?.uid, isOwnProfile, user, userProfile]);
+
+  // Ensure badges for own profile
+  useEffect(() => {
+    if (isOwnProfile && user?.uid) {
+      ensureRookieBadge(user.uid);
+      ensureFoundingFatherBadge(user.uid);
+    }
+  }, [isOwnProfile, user?.uid]);
 
   // Load posts based on active tab
   useEffect(() => {
@@ -729,6 +735,9 @@ function ProfilePage() {
         <button className="settings-gear" onClick={() => setShowSettings(true)}>⚙️</button>
       )}
 
+      {/* Badge Button */}
+      <button className="badge-btn" onClick={() => setShowBadges(true)}>🏆</button>
+
       {/* Back Button */}
       <button className="back-btn" onClick={() => navigate("/")}>← Back</button>
 
@@ -751,15 +760,24 @@ function ProfilePage() {
         </div>
 
         {/* Display Name + Handle */}
-        <h1 className="display-name">{profile.displayName || profile.username}</h1>
+        <div className="display-name-row">
+          <h1 className="display-name">{profile.displayName || profile.username}</h1>
+          {profile.displayBadge && <TinyBadge badgeId={profile.displayBadge} size={20} />}
+        </div>
         <span className="profile-handle">@{profile.username?.toLowerCase()}</span>
         {isOwnProfile && (
           <button
             className="edit-display-name-btn"
             onClick={() => {
-              const newName = prompt("Edit Display Name\n\nYour display name can include emojis, spaces, and special characters. Your @handle cannot be changed.", profile.displayName || profile.username || "");
+              const newName = prompt("Edit Display Name\n\nYour display name can include letters, numbers, and spaces. Your @handle cannot be changed.", profile.displayName || profile.username || "");
               if (newName && newName.trim()) {
-                const trimmed = newName.trim().slice(0, 30);
+                // Remove emojis and special unicode characters
+                const noEmojis = newName.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{231A}-\u{231B}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}\u{2614}-\u{2615}\u{2648}-\u{2653}\u{267F}\u{2693}\u{26A1}\u{26AA}-\u{26AB}\u{26BD}-\u{26BE}\u{26C4}-\u{26C5}\u{26CE}\u{26D4}\u{26EA}\u{26F2}-\u{26F3}\u{26F5}\u{26FA}\u{26FD}\u{2702}\u{2705}\u{2708}-\u{270D}\u{270F}]/gu, '');
+                const trimmed = noEmojis.trim().slice(0, 30);
+                if (!trimmed) {
+                  alert("Please enter a valid display name without emojis.");
+                  return;
+                }
                 updateProfile(user.uid, { displayName: trimmed }).then(() => {
                   setProfile(prev => ({ ...prev, displayName: trimmed }));
                 }).catch(() => alert("Failed to update display name"));
@@ -769,11 +787,6 @@ function ProfilePage() {
             ✏️ Edit Display Name
           </button>
         )}
-
-        {/* Level Badge */}
-        <div className="level-badge">
-          LVL {profile.level} {getLevelEmoji(profile.level)} {profile.title}
-        </div>
 
         {/* Bio */}
         {!isPrivate && (
@@ -841,7 +854,6 @@ function ProfilePage() {
                     )}
                     <div className="request-info">
                       <span className="request-name">{req.fromUsername}</span>
-                      <span className="request-level">LVL {req.fromLevel} • {req.fromTitle}</span>
                     </div>
                   </div>
                   <div className="request-actions">
@@ -1045,6 +1057,16 @@ function ProfilePage() {
         post={sharePost}
         currentUser={user}
         userProfile={userProfile}
+      />
+
+      {/* Badge Modal */}
+      <BadgeModal
+        isOpen={showBadges}
+        onClose={() => setShowBadges(false)}
+        userId={targetUserId}
+        isOwnProfile={isOwnProfile}
+        displayBadgeId={profile?.displayBadge}
+        onBadgeChanged={() => window.location.reload()}
       />
 
       {/* Settings Modal */}
