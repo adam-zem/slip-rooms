@@ -1,14 +1,16 @@
 // src/App.jsx
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Routes, Route, useNavigate } from "react-router-dom";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import { useAuth } from "./contexts/AuthContext";
+import { useBlock } from "./contexts/BlockContext";
 import { signOut } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthPage from "./pages/AuthPage";
 import ProfilePage from "./pages/ProfilePage";
 import AdminPage from "./pages/AdminPage";
+import SupportPage from "./pages/SupportPage";
 import "./pages/GamePage.css"; // Keep styles for the modal
 import { useGames } from "./hooks/useGames";
 import { getPeriodLabel } from "./services/espnService";
@@ -73,6 +75,7 @@ import {
 } from "./services/accountService";
 import { getSortedSportsFromData } from "./services/sportRelevanceService";
 import ShareModal from "./components/ShareModal";
+import ReportModal from "./components/ReportModal";
 import { getTeamColor, extractTeamFromRoomName } from "./utils/teamColors";
 import {
   subscribeToNotifications,
@@ -240,7 +243,12 @@ function RoomSearch({ allRooms, onSelectRoom, activeMarketId }) {
 
 function App() {
   const { user, userProfile, authReady, needsUsername, refreshProfile, isAdmin } = useAuth();
+  const { blockedUserIds, isUserHidden, blockUser, didIBlock } = useBlock();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Public paths that don't require authentication
+  const publicPaths = ['/support'];
 
   // ESPN games hook
   const { gamesBySport, loading: gamesLoading, getGameById, refresh: refreshGames, getActiveGames, getRecentGames, getLiveGamesForSport, getUpcomingGames } = useGames();
@@ -351,6 +359,10 @@ function App() {
   const [shareModalRoom, setShareModalRoom] = useState(null);
   const [shareModalPost, setShareModalPost] = useState(null);
 
+  // Report modal state
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportContent, setReportContent] = useState(null); // { type, id, snapshot }
+
   // refs for smart auto-scroll
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -448,14 +460,18 @@ function App() {
 
     // Subscribe to messages - this returns an unsubscribe function
     const unsubscribe = subscribeToMessages(activeRoomId, (messages) => {
-      setLiveMessages(messages);
+      // Filter out messages from blocked users (both directions)
+      const filteredMessages = blockedUserIds.size > 0
+        ? messages.filter((msg) => !blockedUserIds.has(msg.userId))
+        : messages;
+      setLiveMessages(filteredMessages);
     });
 
     // Cleanup: unsubscribe when room changes or component unmounts
     return () => {
       unsubscribe();
     };
-  }, [activeRoomId, user]);
+  }, [activeRoomId, user, blockedUserIds]);
 
   // Subscribe to trending rooms from new room system (heat map)
   // Filter by the currently selected sport tab
@@ -737,7 +753,14 @@ function App() {
     if (!user?.uid) return;
 
     const unsubConversations = subscribeToConversations(user.uid, (conversations) => {
-      setDmConversations(conversations);
+      // Filter out conversations with blocked users
+      const filteredConversations = blockedUserIds.size > 0
+        ? conversations.filter((conv) => {
+            const otherUserId = conv.participants.find((id) => id !== user.uid);
+            return !otherUserId || !blockedUserIds.has(otherUserId);
+          })
+        : conversations;
+      setDmConversations(filteredConversations);
     });
 
     const unsubUnread = subscribeToUnreadCount(user.uid, (count) => {
@@ -748,14 +771,18 @@ function App() {
       unsubConversations();
       unsubUnread();
     };
-  }, [user?.uid]);
+  }, [user?.uid, blockedUserIds]);
 
   // Subscribe to notifications
   useEffect(() => {
     if (!user?.uid) return;
 
     const unsubNotifications = subscribeToNotifications(user.uid, (notifs) => {
-      setNotifications(notifs);
+      // Filter out notifications from blocked users
+      const filteredNotifs = blockedUserIds.size > 0
+        ? notifs.filter((n) => !n.fromUserId || !blockedUserIds.has(n.fromUserId))
+        : notifs;
+      setNotifications(filteredNotifs);
     });
 
     const unsubNotificationCount = subscribeToNotificationUnreadCount(user.uid, (count) => {
@@ -766,7 +793,7 @@ function App() {
       unsubNotifications();
       unsubNotificationCount();
     };
-  }, [user?.uid]);
+  }, [user?.uid, blockedUserIds]);
 
   // Load recent rooms on mount and when rooms change
   useEffect(() => {
@@ -818,13 +845,17 @@ function App() {
       if (!user?.uid || !showNewDM) return;
       try {
         const friends = await getFriends(user.uid);
-        setDmFriends(friends);
+        // Filter out blocked users from friends list
+        const filteredFriends = blockedUserIds.size > 0
+          ? friends.filter((f) => !blockedUserIds.has(f.id))
+          : friends;
+        setDmFriends(filteredFriends);
       } catch (err) {
         console.error("Failed to load friends:", err);
       }
     }
     loadFriends();
-  }, [user?.uid, showNewDM]);
+  }, [user?.uid, showNewDM, blockedUserIds]);
 
   // Auto-scroll DM messages to bottom
   useEffect(() => {
@@ -853,6 +884,18 @@ function App() {
 
   if (!authReady) {
     return <div style={{ color: "white", padding: 20 }}>Loading...</div>;
+  }
+
+  // Check if current path is public (accessible without auth)
+  const isPublicPath = publicPaths.includes(location.pathname);
+
+  // Allow access to public pages without authentication
+  if (!user && isPublicPath) {
+    return (
+      <Routes>
+        <Route path="/support" element={<SupportPage />} />
+      </Routes>
+    );
   }
 
   if (!user) {
@@ -1764,6 +1807,43 @@ function App() {
     setShareModalPost(null);
   };
 
+  // Report: Open report modal for a message
+  const handleReportMessage = (msg) => {
+    setReportContent({
+      type: "message",
+      id: msg.id,
+      snapshot: {
+        text: msg.text,
+        username: msg.username,
+        userId: msg.userId,
+        imageUrl: msg.imageUrl,
+        gifUrl: msg.gifUrl,
+        roomId: currentRoom?.id,
+        roomName: currentRoom?.name,
+      },
+    });
+    setReportModalOpen(true);
+  };
+
+  // Report: Close report modal
+  const closeReportModal = () => {
+    setReportModalOpen(false);
+    setReportContent(null);
+  };
+
+  // Block user from chat message
+  const handleBlockFromChat = async (msg) => {
+    if (!msg.userId || msg.userId === user?.uid) return;
+    if (window.confirm(`Block @${msg.username}? They won't see your content and you won't see theirs.`)) {
+      try {
+        await blockUser(msg.userId);
+      } catch (err) {
+        console.error("Error blocking user:", err);
+        alert("Failed to block user");
+      }
+    }
+  };
+
   const isTyping = newMessage.trim().length > 0;
 
   // group consecutive messages from same user
@@ -2210,6 +2290,8 @@ function App() {
           <span className="footer-divider">·</span>
           <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
           <span className="footer-divider">·</span>
+          <a href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+          <span className="footer-divider">·</span>
           <a href="mailto:support@sliprooms.com?subject=SlipRooms%20Support">Contact</a>
         </div>
       </aside>
@@ -2283,17 +2365,43 @@ function App() {
 
                   {cluster.messages.map((msg) => (
                     <div key={msg.id} className={`message message-bubble ${msg.type === "image" || msg.type === "gif" ? "message-media" : ""}`}>
-                      {/* Admin delete button */}
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="admin-msg-delete"
-                          onClick={() => handleAdminDeleteMessage(msg.id)}
-                          title="Delete message"
-                        >
-                          ×
-                        </button>
-                      )}
+                      {/* Message actions */}
+                      <div className="message-actions">
+                        {/* Report and Block buttons (not for own messages) */}
+                        {msg.userId !== user?.uid && (
+                          <>
+                            <button
+                              type="button"
+                              className="msg-report"
+                              onClick={() => handleReportMessage(msg)}
+                              title="Report message"
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14">
+                                <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              className="msg-block"
+                              onClick={() => handleBlockFromChat(msg)}
+                              title="Block user"
+                            >
+                              🚫
+                            </button>
+                          </>
+                        )}
+                        {/* Admin delete button */}
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            className="admin-msg-delete"
+                            onClick={() => handleAdminDeleteMessage(msg.id)}
+                            title="Delete message"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                       {/* Text message */}
                       {(!msg.type || msg.type === "text") && (
                         <div className="message-text">{msg.text}</div>
@@ -3125,6 +3233,19 @@ function App() {
                 {activeDMConversation.otherUser?.username || "User"}
               </span>
             </div>
+            <button
+              className="dm-block-btn"
+              onClick={() => {
+                if (window.confirm(`Block @${activeDMConversation.otherUser?.username}? You won't see their messages and they won't see yours.`)) {
+                  blockUser(activeDMConversation.otherUser?.id);
+                  closeDMChat();
+                  setShowDMInbox(false);
+                }
+              }}
+              title="Block user"
+            >
+              🚫
+            </button>
             <button className="dm-close" onClick={() => { closeDMChat(); setShowDMInbox(false); }}>×</button>
           </div>
 
@@ -3142,6 +3263,28 @@ function App() {
                     className={`dm-message ${msg.senderId === user.uid ? "sent" : "received"}`}
                   >
                     <div className="dm-message-bubble">
+                      {msg.senderId !== user.uid && (
+                        <button
+                          className="dm-report-btn"
+                          onClick={() => {
+                            setReportContent({
+                              type: "message",
+                              id: msg.id,
+                              snapshot: {
+                                text: msg.text,
+                                userId: msg.senderId,
+                                conversationId: activeDMConversation?.id,
+                              },
+                            });
+                            setReportModalOpen(true);
+                          }}
+                          title="Report message"
+                        >
+                          <svg viewBox="0 0 24 24" width="12" height="12">
+                            <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+                          </svg>
+                        </button>
+                      )}
                       <p>{msg.text}</p>
                       <span className="dm-message-time">
                         {msg.timestamp?.toLocaleTimeString?.([], { hour: "numeric", minute: "2-digit" }) || ""}
@@ -4201,6 +4344,16 @@ function App() {
         currentUser={user}
         userProfile={userProfile}
       />
+
+      {/* Report Modal */}
+      <ReportModal
+        isOpen={reportModalOpen}
+        onClose={closeReportModal}
+        contentType={reportContent?.type}
+        contentId={reportContent?.id}
+        contentSnapshot={reportContent?.snapshot}
+        reporterId={user?.uid}
+      />
     </div>
   );
 
@@ -4210,6 +4363,7 @@ function App() {
       <Route path="/profile/:userId" element={<ProfilePage />} />
       <Route path="/profile" element={<ProfilePage />} />
       <Route path="/admin" element={<AdminPage />} />
+      <Route path="/support" element={<SupportPage />} />
       <Route path="/" element={mainAppContent} />
     </Routes>
   );

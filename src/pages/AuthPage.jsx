@@ -441,6 +441,12 @@ export default function AuthPage() {
             <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
             <span>·</span>
             <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <span>·</span>
+            <a href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+            <span>·</span>
+            <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
+            <span>·</span>
+            <a href="mailto:support@sliprooms.com">Contact Us</a>
           </div>
         </footer>
       </div>
@@ -527,6 +533,12 @@ export default function AuthPage() {
             <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
             <span>·</span>
             <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <span>·</span>
+            <a href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+            <span>·</span>
+            <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
+            <span>·</span>
+            <a href="mailto:support@sliprooms.com">Contact Us</a>
           </div>
         </footer>
       </div>
@@ -624,6 +636,12 @@ export default function AuthPage() {
             <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
             <span>·</span>
             <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+            <span>·</span>
+            <a href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+            <span>·</span>
+            <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
+            <span>·</span>
+            <a href="mailto:support@sliprooms.com">Contact Us</a>
           </div>
         </footer>
       </div>
@@ -838,6 +856,12 @@ export default function AuthPage() {
           <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
           <span>·</span>
           <a href="/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+          <span>·</span>
+          <a href="/support" target="_blank" rel="noopener noreferrer">Support</a>
+          <span>·</span>
+          <a href="/faq" target="_blank" rel="noopener noreferrer">FAQ</a>
+          <span>·</span>
+          <a href="mailto:support@sliprooms.com">Contact Us</a>
         </div>
       </footer>
     </div>

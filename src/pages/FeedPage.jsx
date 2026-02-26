@@ -28,6 +28,7 @@ import {
   createMentionNotifications,
 } from "../services/notificationService";
 import ShareModal from "../components/ShareModal";
+import ReportModal from "../components/ReportModal";
 import "./FeedPage.css";
 
 // Avatar colors
@@ -120,6 +121,7 @@ function PostCard({
   onDelete,
   onShare,
   onRepost,
+  onReport,
   onUserClick,
   onPostPress,
   showReplyContext = true,
@@ -187,12 +189,18 @@ function PostCard({
             <span className="x-post-dot">·</span>
             <span className="x-post-time">{formatTimeAgo(post.createdAt)}</span>
           </button>
-          {isOwner && (
+          {isOwner ? (
             <button className="x-post-menu" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
               <svg viewBox="0 0 24 24" width="18" height="18">
                 <circle cx="5" cy="12" r="2" fill="currentColor"/>
                 <circle cx="12" cy="12" r="2" fill="currentColor"/>
                 <circle cx="19" cy="12" r="2" fill="currentColor"/>
+              </svg>
+            </button>
+          ) : (
+            <button className="x-post-menu x-post-report" onClick={(e) => { e.stopPropagation(); onReport && onReport(); }} title="Report">
+              <svg viewBox="0 0 24 24" width="18" height="18">
+                <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
               </svg>
             </button>
           )}
@@ -249,7 +257,7 @@ function PostCard({
 }
 
 // Thread Modal - Shows original post + replies with reply composer
-function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onThumbsUp, onThumbsDown }) {
+function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onThumbsUp, onThumbsDown, onReportPost, onReportReply }) {
   const navigate = useNavigate();
   const [replies, setReplies] = useState([]);
   const [replyText, setReplyText] = useState("");
@@ -403,6 +411,13 @@ function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onT
                   <span className="x-post-name">{post.displayName || post.username}</span>
                   <span className="x-post-handle">@{post.username?.toLowerCase()}</span>
                 </div>
+                {post.userId !== currentUser?.uid && (
+                  <button className="x-post-menu x-post-report" onClick={() => onReportPost && onReportPost(post)} title="Report">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                      <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+                    </svg>
+                  </button>
+                )}
               </div>
               <div className="x-original-post-text">
                 <RenderTextWithMentions text={post.text} onUserClick={onUserClick} />
@@ -531,6 +546,17 @@ function ThreadModal({ post, currentUser, userProfile, onClose, onUserClick, onT
                             <path fill="currentColor" d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91z"/>
                           </svg>
                         </button>
+                        {reply.userId !== currentUser?.uid && (
+                          <button
+                            className="x-reply-action x-reply-report"
+                            onClick={() => onReportReply && onReportReply(reply)}
+                            title="Report"
+                          >
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                              <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+                            </svg>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -631,6 +657,8 @@ export default function FeedPage() {
   const [commentsPost, setCommentsPost] = useState(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [sharePost, setSharePost] = useState(null);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportContent, setReportContent] = useState(null); // { type, id, snapshot }
 
   // Track which posts the user has reposted
   const [userReposts, setUserReposts] = useState(new Set());
@@ -839,6 +867,20 @@ export default function FeedPage() {
     setShareModalOpen(true);
   };
 
+  const handleReport = (contentType, content) => {
+    setReportContent({
+      type: contentType,
+      id: content.id,
+      snapshot: {
+        text: content.text,
+        username: content.username,
+        userId: content.userId,
+        images: content.images || [],
+      },
+    });
+    setReportModalOpen(true);
+  };
+
   // Open thread modal - if it's a reply, show the parent post instead
   const openComments = async (post) => {
     if (post.replyToPostId) {
@@ -1008,6 +1050,7 @@ export default function FeedPage() {
                 onDelete={() => handleDeletePost(post)}
                 onShare={() => handleShare(post)}
                 onRepost={() => handleRepost(post)}
+                onReport={() => handleReport("post", post)}
                 onUserClick={handleUserClick}
                 hasReposted={userReposts.has(post.id)}
                 showRepostedBy={feedTab === "friends"}
@@ -1030,6 +1073,8 @@ export default function FeedPage() {
           }}
           onThumbsUp={handleThumbsUp}
           onThumbsDown={handleThumbsDown}
+          onReportPost={(post) => handleReport("post", post)}
+          onReportReply={(reply) => handleReport("comment", reply)}
         />
       )}
 
@@ -1044,6 +1089,19 @@ export default function FeedPage() {
         post={sharePost}
         currentUser={user}
         userProfile={userProfile}
+      />
+
+      {/* Report Modal */}
+      <ReportModal
+        isOpen={reportModalOpen}
+        onClose={() => {
+          setReportModalOpen(false);
+          setReportContent(null);
+        }}
+        contentType={reportContent?.type}
+        contentId={reportContent?.id}
+        contentSnapshot={reportContent?.snapshot}
+        reporterId={user?.uid}
       />
     </div>
   );

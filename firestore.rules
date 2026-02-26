@@ -32,6 +32,10 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == userId;
       // Users can update their own profile
       allow update: if request.auth != null && request.auth.uid == userId;
+      // Allow any authenticated user to update another user's blockedBy array only
+      // This is needed for blocking - blocker adds themselves to blocked user's blockedBy
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['blockedBy']);
       // Admins can update any profile (for banning, etc.)
       allow update: if isAdmin();
       // Only admins can delete user profiles
@@ -119,15 +123,21 @@ service cloud.firestore {
     }
 
     // Friend requests collection
+    // Supports both field naming conventions: from/to and senderId/receiverId
     match /friendRequests/{requestId} {
       // Anyone can read friend requests (to check if already sent)
       allow read: if request.auth != null;
-      // Only the sender can create a request
+      // Only the sender can create a request (supports both field names)
       allow create: if request.auth != null
-        && request.resource.data.from == request.auth.uid;
+        && (request.resource.data.from == request.auth.uid
+            || request.resource.data.senderId == request.auth.uid);
       // Both sender and recipient can delete/update (accept/decline)
+      // Supports both field naming conventions
       allow update, delete: if request.auth != null
-        && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
+        && (resource.data.from == request.auth.uid
+            || resource.data.to == request.auth.uid
+            || resource.data.senderId == request.auth.uid
+            || resource.data.receiverId == request.auth.uid);
     }
 
     // Friendships collection
@@ -297,6 +307,39 @@ service cloud.firestore {
       // Users can delete their own notifications
       allow delete: if request.auth != null
         && resource.data.userId == request.auth.uid;
+    }
+
+    // Reports collection (for reporting posts, messages, users)
+    match /reports/{reportId} {
+      // Users can read their own reports
+      allow read: if request.auth != null
+        && resource.data.reporterId == request.auth.uid;
+      // Admins can read all reports
+      allow read: if isAdmin();
+      // Any authenticated user can create reports (must be reporter)
+      allow create: if request.auth != null
+        && request.resource.data.reporterId == request.auth.uid;
+      // Only admins can update reports (review, action, dismiss)
+      allow update: if isAdmin();
+      // Only admins can delete reports
+      allow delete: if isAdmin();
+    }
+
+    // Friends collection (for blocking - removes friend relationships)
+    // Note: This is separate from friendships collection
+    match /friends/{friendId} {
+      // Authenticated users can read friends
+      allow read: if request.auth != null;
+      // Users can create their own friend entries
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      // Users can delete friend entries they're part of (as userId OR friendId)
+      // This is needed for blocking - removes friendship in both directions
+      allow delete: if request.auth != null
+        && (resource.data.userId == request.auth.uid
+            || resource.data.friendId == request.auth.uid);
+      // Allow update for any authenticated user (for friend management)
+      allow update: if request.auth != null;
     }
   }
 }

@@ -5,13 +5,16 @@ import App from "./App";
 import "./index.css";
 
 import { AuthProvider } from "./contexts/AuthContext";
+import { BlockProvider } from "./contexts/BlockContext";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <AuthProvider>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <BlockProvider>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </BlockProvider>
     </AuthProvider>
   </React.StrictMode>
 );

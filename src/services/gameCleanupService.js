@@ -95,16 +95,21 @@ export async function checkAndCleanupGames(games) {
 
     // Check if game is final
     if (game.isFinal || game.status?.state === "final") {
-      console.log(`[gameCleanup] Game ${game.id} has ended, cleaning up rooms`);
+      try {
+        const deletedRooms = await deleteRoomsForGame(game.id);
+        finishedGameIds.add(game.id);
+        gamesProcessed++;
+        roomsDeleted += deletedRooms.length;
 
-      const deletedRooms = await deleteRoomsForGame(game.id);
-      finishedGameIds.add(game.id);
-      gamesProcessed++;
-      roomsDeleted += deletedRooms.length;
-
-      // Notify listeners
-      if (deletedRooms.length > 0) {
-        notifyGameEnd(game.id, deletedRooms);
+        // Notify listeners
+        if (deletedRooms.length > 0) {
+          notifyGameEnd(game.id, deletedRooms);
+        }
+      } catch (error) {
+        // Silently handle permission errors - cleanup handled server-side
+        if (!error?.message?.includes("permission")) {
+          console.warn("[gameCleanup] Error cleaning up game:", game.id);
+        }
       }
     }
   }
@@ -115,17 +120,19 @@ export async function checkAndCleanupGames(games) {
 /**
  * Get all rooms and check if their associated games have ended
  * Deletes orphaned rooms (game ended 4+ hours ago or game not found)
+ * Note: This operation requires admin permissions. Regular users will
+ * silently skip cleanup - this is handled server-side by Cloud Functions.
  */
 export async function cleanupOrphanedRooms() {
-  console.log("[gameCleanup] Running orphaned room cleanup...");
-
+  // Skip cleanup silently for regular users - this prevents permission errors
+  // The actual cleanup is handled by Firebase Cloud Functions with admin privileges
+  // This client-side version is only for admin users in the app
   try {
     // Get all active rooms
     const roomsQuery = query(collection(db, "rooms"));
     const roomsSnapshot = await getDocs(roomsQuery);
 
     if (roomsSnapshot.empty) {
-      console.log("[gameCleanup] No rooms to check");
       return { checked: 0, deleted: 0 };
     }
 
@@ -141,7 +148,6 @@ export async function cleanupOrphanedRooms() {
     });
 
     const gameIds = Object.keys(roomsByGame);
-    console.log(`[gameCleanup] Checking ${gameIds.length} games with rooms`);
 
     // Fetch current games for all sports
     const sports = ["nfl", "nba", "mlb", "nhl", "soccer", "ufc"];
@@ -152,7 +158,7 @@ export async function cleanupOrphanedRooms() {
         const games = await fetchGames(sport);
         allGames.push(...games);
       } catch (e) {
-        console.error(`[gameCleanup] Error fetching ${sport} games:`, e);
+        // Silently ignore fetch errors - not critical for user experience
       }
     }
 
@@ -178,7 +184,6 @@ export async function cleanupOrphanedRooms() {
           const fourHoursAgo = Date.now() - 4 * 60 * 60 * 1000;
 
           if (createdAt < fourHoursAgo) {
-            console.log(`[gameCleanup] Orphaned room ${room.id} (game ${gameId} not found, room is old)`);
             batch.delete(doc(db, "rooms", room.id));
             roomsToDelete.push(room.id);
             deleted++;
@@ -186,7 +191,6 @@ export async function cleanupOrphanedRooms() {
         }
       } else if (game.isFinal || game.status?.state === "final") {
         // Game has ended - delete all rooms
-        console.log(`[gameCleanup] Game ${gameId} is final, deleting ${rooms.length} rooms`);
         for (const room of rooms) {
           batch.delete(doc(db, "rooms", room.id));
           roomsToDelete.push(room.id);
@@ -199,15 +203,19 @@ export async function cleanupOrphanedRooms() {
 
     if (deleted > 0) {
       await batch.commit();
-      console.log(`[gameCleanup] Cleanup complete: ${deleted} rooms deleted`);
-    } else {
-      console.log("[gameCleanup] No orphaned rooms found");
     }
 
     return { checked: roomsSnapshot.size, deleted };
   } catch (error) {
-    console.error("[gameCleanup] Cleanup error:", error);
-    return { checked: 0, deleted: 0, error };
+    // Handle permission errors gracefully - regular users can't delete rooms
+    // This is expected behavior, not an error to show to users
+    if (error?.code === "permission-denied" || error?.message?.includes("permission")) {
+      // Silently ignore permission errors - cleanup will be handled server-side
+      return { checked: 0, deleted: 0, skipped: true };
+    }
+    // Log other errors but don't throw - prevent red error screens
+    console.warn("[gameCleanup] Cleanup skipped:", error?.message || error);
+    return { checked: 0, deleted: 0, error: error?.message };
   }
 }
 
@@ -218,10 +226,10 @@ export async function cleanupOrphanedRooms() {
  * @param {number} interval - Check interval in ms (default 30 seconds)
  */
 export function startGameMonitor(getGamesBySport, interval = 30000) {
-  console.log("[gameCleanup] Starting game monitor...");
-
-  // Run initial cleanup
-  cleanupOrphanedRooms();
+  // Run initial cleanup silently (will be skipped for non-admin users)
+  cleanupOrphanedRooms().catch(() => {
+    // Silently ignore any errors - cleanup is non-critical for user experience
+  });
 
   // Set up periodic check
   const checkGames = async () => {
@@ -233,7 +241,7 @@ export function startGameMonitor(getGamesBySport, interval = 30000) {
         await checkAndCleanupGames(allGames);
       }
     } catch (e) {
-      console.error("[gameCleanup] Monitor error:", e);
+      // Silently ignore errors - cleanup is handled server-side
     }
   };
 
@@ -242,7 +250,6 @@ export function startGameMonitor(getGamesBySport, interval = 30000) {
   // Return cleanup function
   return () => {
     clearInterval(intervalId);
-    console.log("[gameCleanup] Game monitor stopped");
   };
 }
 

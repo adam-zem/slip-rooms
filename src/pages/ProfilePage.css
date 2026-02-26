@@ -325,6 +325,25 @@
 /* Friend Action */
 .friend-action {
   margin-bottom: 36px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.report-user-btn {
+  background: rgba(113, 118, 123, 0.15) !important;
+  border-color: #71767b !important;
+  color: #71767b !important;
+  padding: 10px 14px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.report-user-btn:hover {
+  background: rgba(239, 68, 68, 0.1) !important;
+  border-color: #ef4444 !important;
+  color: #ef4444 !important;
 }
 
 .friend-active {
@@ -689,6 +708,16 @@
   color: #888;
 }
 
+.profile-post-report {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-post-report:hover {
+  color: #ef4444;
+}
+
 .profile-post-text {
   font-size: 15px;
   color: #fff;
@@ -866,9 +895,28 @@
 .profile-comment-time {
   font-size: 11px;
   color: #666;
+}
+
+.profile-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-top: 4px;
   margin-left: 4px;
-  display: block;
+}
+
+.profile-comment-report {
+  font-size: 11px;
+  color: #666;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+.profile-comment-report:hover {
+  color: #ef4444;
 }
 
 .profile-comment-input-container {
@@ -1888,4 +1936,144 @@
     padding: 8px 12px;
     font-size: 11px;
   }
+}
+
+/* Blocked Screen Styles */
+.blocked-screen {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.blocked-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+
+.blocked-screen h2 {
+  color: var(--white);
+  margin-bottom: 12px;
+  font-size: 24px;
+}
+
+.blocked-screen p {
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+
+/* Block Button */
+.block-user-btn {
+  background: transparent !important;
+  border: 1px solid rgba(239, 68, 68, 0.4) !important;
+  color: #ef4444 !important;
+  padding: 8px 12px !important;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.block-user-btn:hover {
+  background: rgba(239, 68, 68, 0.15) !important;
+  border-color: #ef4444 !important;
+}
+
+/* Block Confirmation Modal */
+.block-modal {
+  text-align: center;
+  max-width: 380px;
+}
+
+.block-warning-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.block-title {
+  margin-bottom: 12px;
+}
+
+.block-warning {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+.block-confirm-btn {
+  background: #ef4444 !important;
+  border-color: #ef4444 !important;
+  color: white !important;
+}
+
+.block-confirm-btn:hover {
+  background: #dc2626 !important;
+}
+
+/* Blocked Users List */
+.blocked-users-btn {
+  background: transparent !important;
+  border: 1px solid var(--matrix-green-dim) !important;
+  color: var(--white) !important;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 10px;
+}
+
+.blocked-users-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.blocked-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.blocked-user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.blocked-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.blocked-user-emoji {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--matrix-green-dim);
+  border-radius: 50%;
+  font-size: 18px;
+}
+
+.blocked-user-name {
+  font-size: 14px;
+  color: var(--white);
+}
+
+.unblock-btn {
+  background: transparent !important;
+  border: 1px solid var(--matrix-green) !important;
+  color: var(--matrix-green) !important;
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+}
+
+.unblock-btn:hover {
+  background: var(--matrix-green) !important;
+  color: var(--black) !important;
 }

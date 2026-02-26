@@ -30,6 +30,13 @@ export function getConversationId(userId1, userId2) {
  * Get or create a conversation between two users
  */
 export async function getOrCreateConversation(userId1, userId2, user1Data = {}, user2Data = {}) {
+  // Check if either user has blocked the other
+  const { isBlockedEitherWay } = await import("./blockService");
+  const blocked = await isBlockedEitherWay(userId1, userId2);
+  if (blocked) {
+    throw new Error("Cannot start conversation with this user");
+  }
+
   const conversationId = getConversationId(userId1, userId2);
   const conversationRef = doc(db, "conversations", conversationId);
   const conversationSnap = await getDoc(conversationRef);
@@ -83,6 +90,15 @@ export async function sendMessage(conversationId, senderId, text) {
 
   const conversationData = conversationSnap.data();
   const otherUserId = conversationData.participants.find((id) => id !== senderId);
+
+  // Check if blocked (either direction)
+  if (otherUserId) {
+    const { isBlockedEitherWay } = await import("./blockService");
+    const blocked = await isBlockedEitherWay(senderId, otherUserId);
+    if (blocked) {
+      return null;
+    }
+  }
 
   // Add the message
   const messageDoc = await addDoc(messagesRef, {

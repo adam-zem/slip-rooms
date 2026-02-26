@@ -458,6 +458,11 @@
   color: #047857;
 }
 
+.x-post-report:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
 .x-post-text {
   font-size: 15px;
   line-height: 1.5;
@@ -1154,6 +1159,10 @@
 }
 
 .x-reply-action.active-dislike {
+  color: #ef4444;
+}
+
+.x-reply-report:hover {
   color: #ef4444;
 }
 

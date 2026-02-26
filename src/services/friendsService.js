@@ -22,6 +22,13 @@ export async function sendFriendRequest(fromUserId, toUserId) {
     throw new Error("Invalid friend request");
   }
 
+  // Check if either user has blocked the other
+  const { isBlockedEitherWay } = await import("./blockService");
+  const blocked = await isBlockedEitherWay(fromUserId, toUserId);
+  if (blocked) {
+    throw new Error("Unable to send friend request");
+  }
+
   // Check if request already exists
   const existingRequest = await getFriendRequest(fromUserId, toUserId);
   if (existingRequest) {

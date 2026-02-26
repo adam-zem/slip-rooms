@@ -5,6 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage, auth } from "../firebase";
 import { signOut } from "firebase/auth";
 import { useAuth } from "../contexts/AuthContext";
+import { useBlock } from "../contexts/BlockContext";
 import { getProfile, updateProfile, createProfileIfMissing } from "../services/profileService";
 import { getFriends, sendFriendRequest, removeFriend, checkFriendship, getPendingRequests, acceptFriendRequest, declineFriendRequest } from "../services/friendsService";
 import { getGreatestHits, addGreatestHit, deleteGreatestHit, fileToBase64 } from "../services/greatestHitsService";
@@ -28,6 +29,7 @@ import {
   addComment,
 } from "../services/postsService";
 import ShareModal from "../components/ShareModal";
+import ReportModal from "../components/ReportModal";
 import BadgeModal from "../components/BadgeModal";
 import TinyBadge from "../components/TinyBadge";
 import { ensureRookieBadge, ensureFoundingFatherBadge } from "../services/badgeService";
@@ -66,6 +68,7 @@ function PostCard({
   onComment,
   onDelete,
   onShare,
+  onReport,
   onUserClick,
 }) {
   const hasThumbsUp = (post.thumbsUp || []).includes(currentUserId);
@@ -91,8 +94,14 @@ function PostCard({
             <span className="profile-post-time">{formatTimeAgo(post.createdAt)}</span>
           </div>
         </button>
-        {isOwner && (
+        {isOwner ? (
           <button className="profile-post-menu" onClick={onDelete}>...</button>
+        ) : (
+          <button className="profile-post-menu profile-post-report" onClick={onReport} title="Report">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+            </svg>
+          </button>
         )}
       </div>
 
@@ -128,7 +137,7 @@ function PostCard({
 }
 
 // Comments Modal
-function CommentsModal({ post, currentUser, userProfile, onClose }) {
+function CommentsModal({ post, currentUser, userProfile, onClose, onReportComment }) {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState("");
   const [sending, setSending] = useState(false);
@@ -199,7 +208,18 @@ function CommentsModal({ post, currentUser, userProfile, onClose }) {
                       <span className="profile-comment-username">{comment.username}</span>
                       <p className="profile-comment-text">{comment.text}</p>
                     </div>
-                    <span className="profile-comment-time">{formatTimeAgo(comment.createdAt)}</span>
+                    <div className="profile-comment-meta">
+                      <span className="profile-comment-time">{formatTimeAgo(comment.createdAt)}</span>
+                      {comment.userId !== currentUser?.uid && (
+                        <button
+                          className="profile-comment-report"
+                          onClick={() => onReportComment && onReportComment(comment)}
+                          title="Report"
+                        >
+                          Report
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -228,9 +248,14 @@ function ProfilePage() {
   const { userId: paramUserId } = useParams();
   const navigate = useNavigate();
   const { user, userProfile, authReady, isAdmin } = useAuth();
+  const { blockedUsers, didIBlock, didTheyBlockMe, blockUser, unblockUser } = useBlock();
 
   const isOwnProfile = !paramUserId || paramUserId === user?.uid;
   const targetUserId = paramUserId || user?.uid;
+
+  // Check block status
+  const iBlockedThem = targetUserId && !isOwnProfile ? didIBlock(targetUserId) : false;
+  const theyBlockedMe = targetUserId && !isOwnProfile ? didTheyBlockMe(targetUserId) : false;
 
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -248,6 +273,8 @@ function ProfilePage() {
   const [commentsPost, setCommentsPost] = useState(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [sharePost, setSharePost] = useState(null);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportContent, setReportContent] = useState(null);
   const postImageRef = useRef(null);
 
   // Profile tabs
@@ -279,6 +306,11 @@ function ProfilePage() {
 
   // Badge modal
   const [showBadges, setShowBadges] = useState(false);
+
+  // Block state
+  const [isBlocking, setIsBlocking] = useState(false);
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [showBlockedUsers, setShowBlockedUsers] = useState(false);
 
   const profilePicRef = useRef(null);
   const hitFileRef = useRef(null);
@@ -621,6 +653,20 @@ function ProfilePage() {
     setShareModalOpen(true);
   };
 
+  const handleReport = (contentType, content) => {
+    setReportContent({
+      type: contentType,
+      id: content.id,
+      snapshot: {
+        text: content.text,
+        username: content.username,
+        userId: content.userId,
+        images: content.images || [],
+      },
+    });
+    setReportModalOpen(true);
+  };
+
   // Hit upload
   const handleHitFile = async (e) => {
     const file = e.target.files?.[0];
@@ -692,6 +738,35 @@ function ProfilePage() {
     }
   };
 
+  // Block/Unblock handlers
+  const handleBlockUser = async () => {
+    if (!targetUserId) return;
+    setIsBlocking(true);
+    try {
+      await blockUser(targetUserId);
+      setShowBlockConfirm(false);
+      navigate("/");
+    } catch (err) {
+      console.error("Error blocking user:", err);
+      alert("Failed to block user");
+    } finally {
+      setIsBlocking(false);
+    }
+  };
+
+  const handleUnblockUser = async () => {
+    if (!targetUserId) return;
+    setIsBlocking(true);
+    try {
+      await unblockUser(targetUserId);
+    } catch (err) {
+      console.error("Error unblocking user:", err);
+      alert("Failed to unblock user");
+    } finally {
+      setIsBlocking(false);
+    }
+  };
+
   const isPrivate = !isOwnProfile && profile && !profile.publicProfile && !isFriend;
   const avatarColor = COLOR_MAP[profile?.avatarColor || "green"] || COLOR_MAP.green;
 
@@ -728,6 +803,41 @@ function ProfilePage() {
     );
   }
 
+  // Blocked screens
+  if (iBlockedThem) {
+    return (
+      <div className="profile-page">
+        <button className="back-btn" onClick={() => navigate("/")}>← Back</button>
+        <div className="profile-center blocked-screen">
+          <span className="blocked-icon">🚫</span>
+          <h2>You have blocked this user</h2>
+          <p>You won't see their content and they won't see yours.</p>
+          <button
+            className="btn primary"
+            onClick={handleUnblockUser}
+            disabled={isBlocking}
+          >
+            {isBlocking ? "Unblocking..." : "Unblock User"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (theyBlockedMe) {
+    return (
+      <div className="profile-page">
+        <button className="back-btn" onClick={() => navigate("/")}>← Back</button>
+        <div className="profile-center blocked-screen">
+          <span className="blocked-icon">🔒</span>
+          <h2>This user is not available</h2>
+          <p>You cannot view this profile.</p>
+          <button className="btn" onClick={() => navigate("/")}>Back to Rooms</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="profile-page">
       {/* Settings Gear */}
@@ -735,8 +845,10 @@ function ProfilePage() {
         <button className="settings-gear" onClick={() => setShowSettings(true)}>⚙️</button>
       )}
 
-      {/* Badge Button */}
-      <button className="badge-btn" onClick={() => setShowBadges(true)}>🏆</button>
+      {/* Badge Button (own profile only) */}
+      {isOwnProfile && (
+        <button className="badge-btn" onClick={() => setShowBadges(true)}>🏆</button>
+      )}
 
       {/* Back Button */}
       <button className="back-btn" onClick={() => navigate("/")}>← Back</button>
@@ -876,6 +988,22 @@ function ProfilePage() {
             ) : (
               <button className="btn primary" onClick={handleAddFriend}>+ Add Friend</button>
             )}
+            <button
+              className="btn report-user-btn"
+              onClick={() => handleReport("user", { id: targetUserId, username: profile?.username })}
+              title="Report user"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16">
+                <path fill="currentColor" d="M3 2v12h5l1 2h6l1-2h5V2H3zm16 10h-4l-1 2H8l-1-2H5V4h14v8z"/>
+              </svg>
+            </button>
+            <button
+              className="btn block-user-btn"
+              onClick={() => setShowBlockConfirm(true)}
+              title="Block user"
+            >
+              🚫
+            </button>
           </div>
         )}
 
@@ -994,6 +1122,7 @@ function ProfilePage() {
                   onComment={() => setCommentsPost(post)}
                   onDelete={() => handleDeletePost(post)}
                   onShare={() => handleSharePost(post)}
+                  onReport={() => handleReport("post", post)}
                   onUserClick={(userId) => navigate(`/profile/${userId}`)}
                 />
               ))
@@ -1046,6 +1175,7 @@ function ProfilePage() {
           currentUser={user}
           userProfile={userProfile}
           onClose={() => setCommentsPost(null)}
+          onReportComment={(comment) => handleReport("comment", comment)}
         />
       )}
 
@@ -1057,6 +1187,19 @@ function ProfilePage() {
         post={sharePost}
         currentUser={user}
         userProfile={userProfile}
+      />
+
+      {/* Report Modal */}
+      <ReportModal
+        isOpen={reportModalOpen}
+        onClose={() => {
+          setReportModalOpen(false);
+          setReportContent(null);
+        }}
+        contentType={reportContent?.type}
+        contentId={reportContent?.id}
+        contentSnapshot={reportContent?.snapshot}
+        reporterId={user?.uid}
       />
 
       {/* Badge Modal */}
@@ -1084,6 +1227,12 @@ function ProfilePage() {
                 <input type="checkbox" defaultChecked />
               </label>
             </div>
+            <button
+              className="btn blocked-users-btn"
+              onClick={() => { setShowSettings(false); setShowBlockedUsers(true); }}
+            >
+              🚫 Blocked Users {blockedUsers.length > 0 && `(${blockedUsers.length})`}
+            </button>
             {isAdmin && (
               <button className="btn admin-link" onClick={() => { setShowSettings(false); navigate("/admin"); }}>
                 🛡️ Admin Dashboard
@@ -1098,6 +1247,40 @@ function ProfilePage() {
               Delete Account
             </button>
             <button className="btn modal-close" onClick={() => setShowSettings(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Blocked Users Modal */}
+      {showBlockedUsers && (
+        <div className="modal-overlay" onClick={() => setShowBlockedUsers(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Blocked Users ({blockedUsers.length})</h2>
+            {blockedUsers.length === 0 ? (
+              <p className="empty-text">No blocked users</p>
+            ) : (
+              <div className="blocked-users-list">
+                {blockedUsers.map((blocked) => (
+                  <div key={blocked.id} className="blocked-user-row">
+                    <div className="blocked-user-info">
+                      {blocked.profilePicture ? (
+                        <img src={blocked.profilePicture} alt={blocked.username} className="blocked-user-avatar" />
+                      ) : (
+                        <span className="blocked-user-emoji">{blocked.avatarEmoji || "🔥"}</span>
+                      )}
+                      <span className="blocked-user-name">@{blocked.username}</span>
+                    </div>
+                    <button
+                      className="btn unblock-btn"
+                      onClick={() => unblockUser(blocked.id)}
+                    >
+                      Unblock
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="btn modal-close" onClick={() => setShowBlockedUsers(false)}>Close</button>
           </div>
         </div>
       )}
@@ -1248,6 +1431,36 @@ function ProfilePage() {
                 disabled={isDeleting || (deleteConfirmText !== "DELETE" && deleteConfirmText !== profile?.username)}
               >
                 {isDeleting ? "Deleting..." : "Delete Account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Block Confirmation Modal */}
+      {showBlockConfirm && (
+        <div className="modal-overlay" onClick={() => !isBlocking && setShowBlockConfirm(false)}>
+          <div className="modal block-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="block-warning-icon">🚫</div>
+            <h2 className="block-title">Block @{profile?.username}?</h2>
+            <p className="block-warning">
+              They won't be able to see your profile, posts, or messages.
+              You won't see their content either. Existing friendships will be removed.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="btn"
+                onClick={() => setShowBlockConfirm(false)}
+                disabled={isBlocking}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn block-confirm-btn"
+                onClick={handleBlockUser}
+                disabled={isBlocking}
+              >
+                {isBlocking ? "Blocking..." : "Block User"}
               </button>
             </div>
           </div>
