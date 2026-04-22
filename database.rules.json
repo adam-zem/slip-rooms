@@ -1,10 +1,10 @@
 {
   "rules": {
-    "presence": {
+    "roomPresence": {
       "$roomId": {
-        "$oddie": {
+        "$userId": {
           ".read": "auth != null",
-          ".write": "auth != null && auth.uid == $oddie"
+          ".write": "auth != null && auth.uid == $userId"
         }
       }
     }

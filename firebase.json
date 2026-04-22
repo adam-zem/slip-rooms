@@ -2,18 +2,30 @@
   "database": {
     "rules": "database.rules.json"
   },
-  "storage": {
-    "rules": "storage.rules"
-  },
   "firestore": {
-    "rules": "firestore.rules"
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
   },
   "hosting": {
     "public": "dist",
     "ignore": [
       "firebase.json",
-      "**/.*",
       "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "/.well-known/apple-app-site-association",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
     ],
     "rewrites": [
       {
@@ -27,6 +39,18 @@
       {
         "source": "/faq",
         "destination": "/faq.html"
+      },
+      {
+        "source": "/room/**",
+        "function": "roomPreview"
+      },
+      {
+        "source": "/post/**",
+        "function": "postPreview"
+      },
+      {
+        "source": "/user/**",
+        "function": "userPreview"
       },
       {
         "source": "**",

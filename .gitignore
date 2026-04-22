@@ -17,6 +17,13 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Service account keys and credentials (NEVER commit these)
+serviceAccountKey.json
+*service-account*.json
+*serviceAccount*.json
+*.pem
+*.key
+
 # Claude Code
 .claude/
 
