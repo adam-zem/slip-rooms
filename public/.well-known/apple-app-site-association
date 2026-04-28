@@ -1,0 +1,31 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "2G9VDP38MY.com.sliprooms.app",
+        "paths": [
+          "/room/*",
+          "/post/*",
+          "/user/*",
+          "/@*"
+        ]
+      },
+      {
+        "appID": "2G9VDP38MY.com.sliprooms.app.preview",
+        "paths": [
+          "/room/*",
+          "/post/*",
+          "/user/*",
+          "/@*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "2G9VDP38MY.com.sliprooms.app",
+      "2G9VDP38MY.com.sliprooms.app.preview"
+    ]
+  }
+}

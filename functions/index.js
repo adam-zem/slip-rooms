@@ -1,0 +1,1221 @@
+// functions/index.js - Cloud Functions for SlipRooms
+const functions = require("firebase-functions");
+const admin = require("firebase-admin");
+
+admin.initializeApp();
+
+const db = admin.firestore();
+const auth = admin.auth();
+const storage = admin.storage();
+
+// Maximum batch size for Firestore operations
+const BATCH_SIZE = 500;
+
+/**
+ * Helper: Delete documents in batches
+ * @param {admin.firestore.Query} query - The query to delete documents from
+ * @returns {Promise<number>} - Number of documents deleted
+ */
+async function deleteQueryBatches(query) {
+  let totalDeleted = 0;
+  let snapshot = await query.limit(BATCH_SIZE).get();
+
+  while (snapshot.size > 0) {
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+    totalDeleted += snapshot.size;
+
+    if (snapshot.size < BATCH_SIZE) {
+      break;
+    }
+    snapshot = await query.limit(BATCH_SIZE).get();
+  }
+
+  return totalDeleted;
+}
+
+/**
+ * Helper: Remove userId from array field in documents matching a query
+ * @param {admin.firestore.Query} query - The query to find documents
+ * @param {string} fieldName - The array field name to update
+ * @param {string} userId - The user ID to remove from the array
+ * @returns {Promise<number>} - Number of documents updated
+ */
+async function removeFromArrayField(query, fieldName, userId) {
+  let totalUpdated = 0;
+  let snapshot = await query.limit(BATCH_SIZE).get();
+
+  while (snapshot.size > 0) {
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.update(doc.ref, {
+        [fieldName]: admin.firestore.FieldValue.arrayRemove(userId),
+      });
+    });
+    await batch.commit();
+    totalUpdated += snapshot.size;
+
+    if (snapshot.size < BATCH_SIZE) {
+      break;
+    }
+    snapshot = await query.limit(BATCH_SIZE).get();
+  }
+
+  return totalUpdated;
+}
+
+/**
+ * Helper: Verify Firebase ID token from Authorization header
+ * @param {string} authHeader - The Authorization header value
+ * @returns {Promise<{uid: string}>} - Decoded token with uid
+ */
+async function verifyAuthToken(authHeader) {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const idToken = authHeader.split("Bearer ")[1];
+  try {
+    const decodedToken = await auth.verifyIdToken(idToken);
+    return decodedToken;
+  } catch (error) {
+    console.error("Token verification failed:", error);
+    return null;
+  }
+}
+
+/**
+ * Admin Delete User (HTTP version) - For mobile app compatibility
+ * Manually verifies auth token since onCall doesn't work with React Native direct HTTP
+ */
+exports.adminDeleteUserHttp = functions.https.onRequest(async (req, res) => {
+  // Handle CORS
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.status(405).json({ error: { message: "Method not allowed" } });
+    return;
+  }
+
+  try {
+    // 1. Verify authentication manually
+    const decodedToken = await verifyAuthToken(req.headers.authorization);
+    if (!decodedToken) {
+      res.status(401).json({ error: { message: "Unauthenticated" } });
+      return;
+    }
+
+    const callerUid = decodedToken.uid;
+    const targetUserId = req.body.targetUserId;
+
+    if (!targetUserId) {
+      res.status(400).json({ error: { message: "targetUserId is required" } });
+      return;
+    }
+
+    // 2. Verify caller is an admin
+    const callerDoc = await db.collection("users").doc(callerUid).get();
+    if (!callerDoc.exists || !callerDoc.data().isAdmin) {
+      res.status(403).json({ error: { message: "Only admins can delete user accounts" } });
+      return;
+    }
+
+    // 3. Prevent self-deletion
+    if (callerUid === targetUserId) {
+      res.status(400).json({ error: { message: "Cannot delete your own account" } });
+      return;
+    }
+
+    // 4. Get target user data
+    const targetUserDoc = await db.collection("users").doc(targetUserId).get();
+    if (!targetUserDoc.exists) {
+      res.status(404).json({ error: { message: "Target user not found" } });
+      return;
+    }
+
+    const targetUserData = targetUserDoc.data();
+    const username = targetUserData.username || "";
+    const usernameLower = targetUserData.usernameLower || username.toLowerCase();
+
+    // Run the deletion (same logic as onCall version)
+    const deletionSummary = {
+      posts: 0, likes: 0, dislikes: 0, reposts: 0, greatestHits: 0,
+      notifications: 0, friendships: 0, friendRequests: 0, friends: 0,
+      conversations: 0, roomMessages: 0, roomSubmissions: 0,
+      reports: 0, filterLogs: 0, blockedReferences: 0,
+    };
+
+    // Phase 2-7: Delete all user data (simplified - calls same queries)
+    deletionSummary.posts = await deleteQueryBatches(
+      db.collection("posts").where("authorId", "==", targetUserId)
+    );
+    deletionSummary.likes = await deleteQueryBatches(
+      db.collection("likes").where("userId", "==", targetUserId)
+    );
+    deletionSummary.dislikes = await deleteQueryBatches(
+      db.collection("dislikes").where("userId", "==", targetUserId)
+    );
+    deletionSummary.reposts = await deleteQueryBatches(
+      db.collection("reposts").where("userId", "==", targetUserId)
+    );
+    deletionSummary.greatestHits = await deleteQueryBatches(
+      db.collection("greatestHits").where("oddieid", "==", targetUserId)
+    );
+
+    // Notifications
+    const notifReceived = await deleteQueryBatches(
+      db.collection("notifications").where("userId", "==", targetUserId)
+    );
+    const notifSent = await deleteQueryBatches(
+      db.collection("notifications").where("fromUserId", "==", targetUserId)
+    );
+    deletionSummary.notifications = notifReceived + notifSent;
+
+    // Friendships
+    const fs1 = await deleteQueryBatches(
+      db.collection("friendships").where("user1", "==", targetUserId)
+    );
+    const fs2 = await deleteQueryBatches(
+      db.collection("friendships").where("user2", "==", targetUserId)
+    );
+    deletionSummary.friendships = fs1 + fs2;
+
+    // Friend requests
+    const fr1 = await deleteQueryBatches(
+      db.collection("friendRequests").where("from", "==", targetUserId)
+    );
+    const fr2 = await deleteQueryBatches(
+      db.collection("friendRequests").where("to", "==", targetUserId)
+    );
+    deletionSummary.friendRequests = fr1 + fr2;
+
+    // Friends collection
+    const friends1 = await deleteQueryBatches(
+      db.collection("friends").where("oddieid", "==", targetUserId)
+    );
+    const friends2 = await deleteQueryBatches(
+      db.collection("friends").where("oddiefriendid", "==", targetUserId)
+    );
+    deletionSummary.friends = friends1 + friends2;
+
+    // Conversations
+    const convosSnapshot = await db.collection("conversations")
+      .where("participants", "array-contains", targetUserId)
+      .get();
+    for (const convoDoc of convosSnapshot.docs) {
+      const messagesQuery = db.collection("conversations").doc(convoDoc.id).collection("messages");
+      await deleteQueryBatches(messagesQuery);
+      await convoDoc.ref.delete();
+      deletionSummary.conversations++;
+    }
+
+    // Room messages
+    const roomsSnapshot = await db.collection("rooms").get();
+    for (const roomDoc of roomsSnapshot.docs) {
+      const deleted = await deleteQueryBatches(
+        db.collection("rooms").doc(roomDoc.id).collection("messages")
+          .where("userId", "==", targetUserId)
+      );
+      deletionSummary.roomMessages += deleted;
+    }
+
+    // Other data
+    deletionSummary.roomSubmissions = await deleteQueryBatches(
+      db.collection("roomSubmissions").where("oddieid", "==", targetUserId)
+    );
+    deletionSummary.reports = await deleteQueryBatches(
+      db.collection("reports").where("reporterId", "==", targetUserId)
+    );
+    deletionSummary.filterLogs = await deleteQueryBatches(
+      db.collection("filterLogs").where("userId", "==", targetUserId)
+    );
+
+    // Delete presence
+    try {
+      await db.collection("presence").doc(targetUserId).delete();
+    } catch (e) {}
+
+    // Delete username reservation
+    if (usernameLower) {
+      try {
+        await db.collection("usernames").doc(usernameLower).delete();
+      } catch (e) {}
+    }
+
+    // Delete user document
+    await db.collection("users").doc(targetUserId).delete();
+
+    // Delete profile picture
+    try {
+      const bucket = storage.bucket();
+      await bucket.deleteFiles({ prefix: `profilePictures/${targetUserId}` });
+    } catch (e) {}
+
+    // Delete Firebase Auth account
+    try {
+      await auth.deleteUser(targetUserId);
+    } catch (e) {}
+
+    // Log admin action
+    await db.collection("adminLogs").add({
+      adminId: callerUid,
+      action: "delete_user_account",
+      targetUserId,
+      targetUsername: username,
+      deletionSummary,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.status(200).json({
+      result: {
+        success: true,
+        deletedUserId: targetUserId,
+        deletedUsername: username,
+        deletionSummary,
+      },
+    });
+  } catch (error) {
+    console.error("Error in adminDeleteUserHttp:", error);
+    res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+/**
+ * Admin Delete User - Completely removes a user and all their data
+ * Callable function that only admins can invoke
+ */
+exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
+  // 1. Verify authentication
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "Must be authenticated to delete users."
+    );
+  }
+
+  const callerUid = context.auth.uid;
+  const targetUserId = data.targetUserId;
+
+  if (!targetUserId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "targetUserId is required."
+    );
+  }
+
+  // 2. Verify caller is an admin
+  const callerDoc = await db.collection("users").doc(callerUid).get();
+  if (!callerDoc.exists || !callerDoc.data().isAdmin) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Only admins can delete user accounts."
+    );
+  }
+
+  // 3. Prevent self-deletion
+  if (callerUid === targetUserId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Admins cannot delete their own account via this function."
+    );
+  }
+
+  // 4. Get target user data for logging
+  const targetUserDoc = await db.collection("users").doc(targetUserId).get();
+  if (!targetUserDoc.exists) {
+    throw new functions.https.HttpsError(
+      "not-found",
+      "Target user not found."
+    );
+  }
+
+  const targetUserData = targetUserDoc.data();
+  const username = targetUserData.username || "";
+  const email = targetUserData.email || "";
+  const usernameLower = username.toLowerCase();
+
+  // Track deletion summary
+  const summary = {
+    posts: 0,
+    likes: 0,
+    dislikes: 0,
+    reposts: 0,
+    greatestHits: 0,
+    notifications: 0,
+    friendships: 0,
+    friendRequests: 0,
+    friends: 0,
+    conversations: 0,
+    conversationMessages: 0,
+    roomMessages: 0,
+    roomSubmissions: 0,
+    reports: 0,
+    filterLogs: 0,
+    presence: 0,
+    blockedCleanup: 0,
+    usernameReservation: 0,
+    userDocument: 0,
+    profilePicture: false,
+    authAccount: false,
+  };
+
+  try {
+    // Phase 1: Already done - got user data
+
+    // Phase 2: Delete user-created content
+    // Posts (where authorId or userId matches)
+    const postsQuery1 = db.collection("posts").where("authorId", "==", targetUserId);
+    const postsQuery2 = db.collection("posts").where("userId", "==", targetUserId);
+    summary.posts += await deleteQueryBatches(postsQuery1);
+    summary.posts += await deleteQueryBatches(postsQuery2);
+
+    // Likes
+    const likesQuery = db.collection("likes").where("userId", "==", targetUserId);
+    summary.likes = await deleteQueryBatches(likesQuery);
+
+    // Dislikes
+    const dislikesQuery = db.collection("dislikes").where("userId", "==", targetUserId);
+    summary.dislikes = await deleteQueryBatches(dislikesQuery);
+
+    // Reposts
+    const repostsQuery = db.collection("reposts").where("userId", "==", targetUserId);
+    summary.reposts = await deleteQueryBatches(repostsQuery);
+
+    // Greatest Hits
+    const hitsQuery = db.collection("greatestHits").where("userId", "==", targetUserId);
+    summary.greatestHits = await deleteQueryBatches(hitsQuery);
+
+    // Phase 3: Delete notifications (received and sent)
+    const notificationsQuery1 = db.collection("notifications").where("userId", "==", targetUserId);
+    const notificationsQuery2 = db.collection("notifications").where("fromUserId", "==", targetUserId);
+    summary.notifications += await deleteQueryBatches(notificationsQuery1);
+    summary.notifications += await deleteQueryBatches(notificationsQuery2);
+
+    // Phase 4: Delete social connections
+    // Friendships (user1 or user2 matches)
+    const friendshipsQuery1 = db.collection("friendships").where("user1", "==", targetUserId);
+    const friendshipsQuery2 = db.collection("friendships").where("user2", "==", targetUserId);
+    summary.friendships += await deleteQueryBatches(friendshipsQuery1);
+    summary.friendships += await deleteQueryBatches(friendshipsQuery2);
+
+    // Friend requests (from or to matches)
+    const friendRequestsQuery1 = db.collection("friendRequests").where("from", "==", targetUserId);
+    const friendRequestsQuery2 = db.collection("friendRequests").where("to", "==", targetUserId);
+    summary.friendRequests += await deleteQueryBatches(friendRequestsQuery1);
+    summary.friendRequests += await deleteQueryBatches(friendRequestsQuery2);
+
+    // Friends collection (userId or friendId matches)
+    const friendsQuery1 = db.collection("friends").where("userId", "==", targetUserId);
+    const friendsQuery2 = db.collection("friends").where("friendId", "==", targetUserId);
+    summary.friends += await deleteQueryBatches(friendsQuery1);
+    summary.friends += await deleteQueryBatches(friendsQuery2);
+
+    // Phase 5: Delete conversations and messages
+    // Find conversations where user is a participant
+    const conversationsSnapshot = await db.collection("conversations")
+      .where("participants", "array-contains", targetUserId)
+      .get();
+
+    for (const convDoc of conversationsSnapshot.docs) {
+      // Delete all messages in the conversation
+      const messagesQuery = convDoc.ref.collection("messages");
+      summary.conversationMessages += await deleteQueryBatches(messagesQuery);
+      // Delete the conversation itself
+      await convDoc.ref.delete();
+      summary.conversations++;
+    }
+
+    // Phase 6: Delete room messages from all rooms
+    const roomsSnapshot = await db.collection("rooms").get();
+    for (const roomDoc of roomsSnapshot.docs) {
+      const roomMessagesQuery = roomDoc.ref.collection("messages")
+        .where("userId", "==", targetUserId);
+      summary.roomMessages += await deleteQueryBatches(roomMessagesQuery);
+    }
+
+    // Phase 7: Delete misc data
+    // Room submissions (oddieid matches)
+    const submissionsQuery = db.collection("roomSubmissions").where("oddieid", "==", targetUserId);
+    summary.roomSubmissions = await deleteQueryBatches(submissionsQuery);
+
+    // Reports (reporterId matches)
+    const reportsQuery = db.collection("reports").where("reporterId", "==", targetUserId);
+    summary.reports = await deleteQueryBatches(reportsQuery);
+
+    // Filter logs (userId matches)
+    const filterLogsQuery = db.collection("filterLogs").where("userId", "==", targetUserId);
+    summary.filterLogs = await deleteQueryBatches(filterLogsQuery);
+
+    // Presence document
+    const presenceRef = db.collection("presence").doc(targetUserId);
+    const presenceDoc = await presenceRef.get();
+    if (presenceDoc.exists) {
+      await presenceRef.delete();
+      summary.presence = 1;
+    }
+
+    // Phase 8: Clean up blocked arrays on other users
+    // Find users who have this user in their blockedUsers array
+    const blockedByQuery = db.collection("users").where("blockedUsers", "array-contains", targetUserId);
+    summary.blockedCleanup += await removeFromArrayField(blockedByQuery, "blockedUsers", targetUserId);
+
+    // Find users who have this user in their blockedBy array
+    const blockedUsersQuery = db.collection("users").where("blockedBy", "array-contains", targetUserId);
+    summary.blockedCleanup += await removeFromArrayField(blockedUsersQuery, "blockedBy", targetUserId);
+
+    // Phase 9: Delete username reservation
+    if (usernameLower) {
+      const usernameRef = db.collection("usernames").doc(usernameLower);
+      const usernameDoc = await usernameRef.get();
+      if (usernameDoc.exists) {
+        await usernameRef.delete();
+        summary.usernameReservation = 1;
+      }
+    }
+
+    // Phase 10: Delete user document
+    await db.collection("users").doc(targetUserId).delete();
+    summary.userDocument = 1;
+
+    // Phase 11: Delete profile picture from Storage
+    if (targetUserData.profilePicture) {
+      try {
+        const bucket = storage.bucket();
+        const filePath = `profilePics/${targetUserId}`;
+        await bucket.file(filePath).delete();
+        summary.profilePicture = true;
+      } catch (storageErr) {
+        // File might not exist, continue
+        console.log("Profile picture deletion skipped:", storageErr.message);
+      }
+    }
+
+    // Phase 12: Delete Firebase Auth account
+    try {
+      await auth.deleteUser(targetUserId);
+      summary.authAccount = true;
+    } catch (authErr) {
+      // Auth account might not exist if user signed up differently
+      console.log("Auth account deletion skipped:", authErr.message);
+    }
+
+    // Phase 13: Log admin action
+    const adminUsername = callerDoc.data().username || callerUid;
+    const logId = `${Date.now()}-${callerUid}`;
+    await db.collection("adminLogs").doc(logId).set({
+      id: logId,
+      adminId: callerUid,
+      adminUsername: adminUsername,
+      action: "delete_user_account_complete",
+      details: {
+        userId: targetUserId,
+        username: username,
+        email: email,
+        summary: summary,
+      },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      success: true,
+      message: `User ${username} (${targetUserId}) has been completely deleted.`,
+      summary: summary,
+    };
+
+  } catch (error) {
+    console.error("Error in adminDeleteUser:", error);
+    throw new functions.https.HttpsError(
+      "internal",
+      `Failed to delete user: ${error.message}`
+    );
+  }
+});
+
+// ==================== DYNAMIC LINK PREVIEWS ====================
+// Serves HTML with Open Graph meta tags for rich link previews in iMessage/social media
+// Also handles smart app banner and redirect to App Store
+
+const APP_STORE_URL = "https://apps.apple.com/app/sliprooms/id6759553452";
+const LOGO_URL = "https://sliprooms.com/images/app-icon.png";
+
+/**
+ * Generate HTML with Open Graph meta tags for link previews
+ */
+function generatePreviewHTML(options) {
+  const {
+    title,
+    description,
+    imageUrl = LOGO_URL,
+    url,
+    type = "website",
+    appArgument = "",
+  } = options;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="${type}">
+  <meta property="og:url" content="${url}">
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${description}">
+  <meta property="og:image" content="${imageUrl}">
+  <meta property="og:site_name" content="SlipRooms">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${title}">
+  <meta name="twitter:description" content="${description}">
+  <meta name="twitter:image" content="${imageUrl}">
+
+  <!-- iOS Smart App Banner -->
+  <meta name="apple-itunes-app" content="app-id=6759553452, app-argument=${appArgument}">
+
+  <title>${title} - SlipRooms</title>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+    }
+    .logo { width: 80px; height: 80px; margin-bottom: 20px; border-radius: 16px; }
+    h1 { color: #047857; margin: 0 0 10px; font-size: 24px; }
+    p { color: #888; margin: 0 0 30px; font-size: 16px; }
+    .btn {
+      background: #047857;
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 16px;
+    }
+    .btn:hover { background: #059669; }
+    .secondary { color: #666; margin-top: 20px; font-size: 14px; }
+    .secondary a { color: #047857; }
+  </style>
+</head>
+<body>
+  <img src="${LOGO_URL}" alt="SlipRooms" class="logo">
+  <h1>${title}</h1>
+  <p>${description}</p>
+  <a href="${APP_STORE_URL}" class="btn">Open in App</a>
+  <p class="secondary">Don't have the app? <a href="${APP_STORE_URL}">Download SlipRooms</a></p>
+
+  <script>
+    // Try to open the app, fallback to App Store
+    (function() {
+      var appUrl = "sliprooms://${appArgument}";
+      var start = Date.now();
+
+      // Try opening the app
+      window.location.href = appUrl;
+
+      // If still here after 1.5s, app probably not installed
+      setTimeout(function() {
+        if (Date.now() - start < 2000) {
+          // User came back quickly, app opened
+        }
+      }, 1500);
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Dynamic link handler for rooms
+ */
+exports.roomPreview = functions.https.onRequest(async (req, res) => {
+  const roomId = req.path.split("/").pop() || req.query.id;
+
+  if (!roomId) {
+    res.status(400).send("Room ID required");
+    return;
+  }
+
+  try {
+    const roomDoc = await db.collection("rooms").doc(roomId).get();
+
+    let title = "Join this Room";
+    let description = "Come sweat with us on SlipRooms!";
+
+    if (roomDoc.exists) {
+      const room = roomDoc.data();
+      title = room.name || "Live Room";
+      description = room.gameName
+        ? `${room.gameName} • ${room.userCount || 0} sweating`
+        : `${room.userCount || 0} people sweating in this room`;
+    }
+
+    const html = generatePreviewHTML({
+      title,
+      description,
+      url: `https://sliprooms.com/room/${roomId}`,
+      appArgument: `room/${roomId}`,
+    });
+
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error generating room preview:", error);
+    res.status(500).send("Error loading room");
+  }
+});
+
+/**
+ * Dynamic link handler for posts
+ */
+exports.postPreview = functions.https.onRequest(async (req, res) => {
+  const postId = req.path.split("/").pop() || req.query.id;
+
+  if (!postId) {
+    res.status(400).send("Post ID required");
+    return;
+  }
+
+  try {
+    const postDoc = await db.collection("posts").doc(postId).get();
+
+    let title = "Post on SlipRooms";
+    let description = "Check out this post on SlipRooms";
+    let imageUrl = LOGO_URL;
+
+    if (postDoc.exists) {
+      const post = postDoc.data();
+      title = post.username ? `@${post.username} on SlipRooms` : "Post on SlipRooms";
+      description = post.text
+        ? (post.text.length > 150 ? post.text.slice(0, 150) + "..." : post.text)
+        : "Check out this post on SlipRooms";
+
+      // Use post image if available
+      if (post.images && post.images.length > 0) {
+        imageUrl = post.images[0];
+      }
+    }
+
+    const html = generatePreviewHTML({
+      title,
+      description,
+      imageUrl,
+      url: `https://sliprooms.com/post/${postId}`,
+      appArgument: `post/${postId}`,
+    });
+
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error generating post preview:", error);
+    res.status(500).send("Error loading post");
+  }
+});
+
+/**
+ * Dynamic link handler for user profiles
+ */
+exports.userPreview = functions.https.onRequest(async (req, res) => {
+  const userId = req.path.split("/").pop() || req.query.id;
+
+  if (!userId) {
+    res.status(400).send("User ID required");
+    return;
+  }
+
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+
+    let title = "Profile on SlipRooms";
+    let description = "Check out this profile on SlipRooms";
+    let imageUrl = LOGO_URL;
+
+    if (userDoc.exists) {
+      const user = userDoc.data();
+      title = user.username ? `@${user.username}` : "SlipRooms User";
+      description = user.bio || "Check out this profile on SlipRooms";
+
+      if (user.profilePicture) {
+        imageUrl = user.profilePicture;
+      }
+    }
+
+    const html = generatePreviewHTML({
+      title,
+      description,
+      imageUrl,
+      url: `https://sliprooms.com/user/${userId}`,
+      appArgument: `user/${userId}`,
+      type: "profile",
+    });
+
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error generating user preview:", error);
+    res.status(500).send("Error loading profile");
+  }
+});
+
+// ==================== SWEAT POINTS SYSTEM ====================
+
+/**
+ * Award Sweat Points to a user
+ * Called when someone likes/unlikes a post
+ * Bypasses security rules since it runs server-side
+ */
+exports.awardSweatPoints = functions.https.onCall(async (data, context) => {
+  // Verify the user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be authenticated to award sweat points"
+    );
+  }
+
+  const { recipientUserId, amount, action } = data;
+
+  // Validate input
+  if (!recipientUserId || typeof recipientUserId !== "string") {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "recipientUserId is required and must be a string"
+    );
+  }
+
+  if (typeof amount !== "number" || amount === 0) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "amount is required and must be a non-zero number"
+    );
+  }
+
+  // Don't allow self-awarding
+  if (recipientUserId === context.auth.uid) {
+    console.log(`[awardSweatPoints] Skipping self-award for user ${recipientUserId}`);
+    return { success: true, message: "Self-award skipped" };
+  }
+
+  try {
+    const userRef = db.collection("users").doc(recipientUserId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      console.log(`[awardSweatPoints] User ${recipientUserId} not found`);
+      throw new functions.https.HttpsError(
+        "not-found",
+        `User ${recipientUserId} not found`
+      );
+    }
+
+    const userData = userDoc.data() || {};
+    const currentSweatPoints = userData.sweatPoints || 0;
+    const currentWeeklyPoints = userData.weeklySweatPoints || 0;
+
+    const newSweatPoints = currentSweatPoints + amount;
+    const newWeeklyPoints = currentWeeklyPoints + amount;
+
+    await userRef.update({
+      sweatPoints: newSweatPoints,
+      weeklySweatPoints: newWeeklyPoints,
+    });
+
+    console.log(
+      `[awardSweatPoints] SUCCESS: ${action || "update"} ${amount} SP for user ${recipientUserId}. ` +
+      `Old: ${currentSweatPoints}, New: ${newSweatPoints}`
+    );
+
+    return {
+      success: true,
+      recipientUserId,
+      amount,
+      oldSweatPoints: currentSweatPoints,
+      newSweatPoints,
+      action: action || "update",
+    };
+  } catch (error) {
+    console.error(`[awardSweatPoints] Error:`, error);
+    throw new functions.https.HttpsError(
+      "internal",
+      `Failed to award sweat points: ${error.message}`
+    );
+  }
+});
+
+// ==================== HASHTAG TRACKING ====================
+
+/**
+ * Record hashtag usage when a post is created
+ * Ensures hashtags are properly tracked in the hashtags collection
+ */
+exports.recordHashtags = functions.https.onCall(async (data, context) => {
+  // Verify the user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be authenticated to record hashtags"
+    );
+  }
+
+  const { hashtags } = data;
+
+  if (!hashtags || !Array.isArray(hashtags) || hashtags.length === 0) {
+    return { success: true, message: "No hashtags to record" };
+  }
+
+  try {
+    const batch = db.batch();
+    const hashtagsRef = db.collection("hashtags");
+
+    for (const tag of hashtags) {
+      const normalizedTag = String(tag).toLowerCase().trim();
+      if (!normalizedTag) continue;
+
+      const tagDocRef = hashtagsRef.doc(normalizedTag);
+      const tagDoc = await tagDocRef.get();
+
+      if (tagDoc.exists) {
+        const currentCount = tagDoc.data().count || 0;
+        batch.update(tagDocRef, {
+          count: currentCount + 1,
+          lastUsedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else {
+        batch.set(tagDocRef, {
+          tag: normalizedTag,
+          count: 1,
+          lastUsedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    await batch.commit();
+    console.log(`[recordHashtags] Recorded ${hashtags.length} hashtags`);
+
+    return {
+      success: true,
+      hashtagsRecorded: hashtags.length,
+    };
+  } catch (error) {
+    console.error(`[recordHashtags] Error:`, error);
+    throw new functions.https.HttpsError(
+      "internal",
+      `Failed to record hashtags: ${error.message}`
+    );
+  }
+});
+
+// Send password reset email via Resend
+exports.sendPasswordResetEmail = functions.https.onCall(async (data, context) => {
+  const { email } = data;
+  if (!email) throw new functions.https.HttpsError("invalid-argument", "Email is required");
+
+  try {
+    const resetLink = await auth.generatePasswordResetLink(email);
+    const { Resend } = require("resend");
+    const resend = new Resend("re_VXXTtmX8_58BP8VQdjHQEZB3VtTtjj25E");
+
+    await resend.emails.send({
+      from: "SlipRooms <support@sliprooms.com>",
+      to: email,
+      subject: "Reset your SlipRooms password",
+      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;background:#0a0a0a;color:#fff;padding:32px;border-radius:12px">
+        <h2 style="color:#10b981">SlipRooms</h2>
+        <p>You requested a password reset. Click the button below to set a new password.</p>
+        <a href="${resetLink}" style="display:inline-block;background:#10b981;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;margin:16px 0">Reset Password</a>
+        <p style="color:#888;font-size:12px">If you didn't request this, ignore this email. This link expires in 1 hour.</p>
+      </div>`
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Password reset error:", error);
+    throw new functions.https.HttpsError("internal", "Failed to send reset email");
+  }
+});
+
+// ==================== PUSH NOTIFICATIONS ====================
+
+/**
+ * Send an Expo push notification
+ * @param {string} expoPushToken - The user's Expo push token
+ * @param {string} title - Notification title
+ * @param {string} body - Notification body
+ * @param {object} data - Additional data payload
+ */
+async function sendExpoPushNotification(expoPushToken, title, body, data = {}) {
+  if (!expoPushToken || !expoPushToken.startsWith("ExponentPushToken[")) {
+    console.log("[PushNotification] Invalid or missing push token:", expoPushToken);
+    return;
+  }
+
+  const message = {
+    to: expoPushToken,
+    sound: "default",
+    title,
+    body,
+    data,
+  };
+
+  try {
+    const response = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(message),
+    });
+
+    const result = await response.json();
+    console.log("[PushNotification] Sent:", result);
+    return result;
+  } catch (error) {
+    console.error("[PushNotification] Error sending:", error);
+  }
+}
+
+/**
+ * Get user data with push token
+ */
+async function getUserWithPushToken(userId) {
+  const userDoc = await db.collection("users").doc(userId).get();
+  if (!userDoc.exists) return null;
+  return { id: userId, ...userDoc.data() };
+}
+
+/**
+ * Trigger: New follower created
+ * Sends push notification to the user being followed
+ */
+exports.onNewFollower = functions.firestore
+  .document("followers/{followerId}")
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const followerId = data.user1; // The user doing the following
+    const followedId = data.user2; // The user being followed
+
+    if (!followerId || !followedId || followerId === followedId) return;
+
+    try {
+      // Get both users' data
+      const [follower, followed] = await Promise.all([
+        getUserWithPushToken(followerId),
+        getUserWithPushToken(followedId),
+      ]);
+
+      if (!followed || !followed.expoPushToken) {
+        console.log("[onNewFollower] No push token for followed user");
+        return;
+      }
+
+      const followerName = follower?.username || "Someone";
+
+      await sendExpoPushNotification(
+        followed.expoPushToken,
+        "New Follower",
+        `${followerName} started following you`,
+        {
+          type: "follower",
+          fromUserId: followerId,
+          fromUsername: followerName,
+        }
+      );
+
+      console.log(`[onNewFollower] Notification sent to ${followedId}`);
+    } catch (error) {
+      console.error("[onNewFollower] Error:", error);
+    }
+  });
+
+/**
+ * Trigger: New like created
+ * Sends push notification to the post author
+ */
+exports.onNewLike = functions.firestore
+  .document("likes/{likeId}")
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const likerId = data.userId;
+    const postId = data.postId;
+
+    if (!likerId || !postId) return;
+
+    try {
+      // Get the post to find the author
+      const postDoc = await db.collection("posts").doc(postId).get();
+      if (!postDoc.exists) return;
+
+      const post = postDoc.data();
+      const authorId = post.authorId || post.userId;
+
+      // Don't notify if user liked their own post
+      if (authorId === likerId) return;
+
+      // Get author and liker data
+      const [author, liker] = await Promise.all([
+        getUserWithPushToken(authorId),
+        getUserWithPushToken(likerId),
+      ]);
+
+      if (!author || !author.expoPushToken) {
+        console.log("[onNewLike] No push token for post author");
+        return;
+      }
+
+      const likerName = liker?.username || "Someone";
+      const postPreview = post.text ? post.text.substring(0, 50) : "your post";
+
+      await sendExpoPushNotification(
+        author.expoPushToken,
+        "New Upvote",
+        `${likerName} upvoted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
+        {
+          type: "upvote",
+          postId,
+          fromUserId: likerId,
+          fromUsername: likerName,
+        }
+      );
+
+      console.log(`[onNewLike] Notification sent to ${authorId}`);
+    } catch (error) {
+      console.error("[onNewLike] Error:", error);
+    }
+  });
+
+/**
+ * Trigger: New repost created
+ * Sends push notification to the original post author
+ */
+exports.onNewRepost = functions.firestore
+  .document("reposts/{repostId}")
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const reposterId = data.userId;
+    const postId = data.postId;
+
+    if (!reposterId || !postId) return;
+
+    try {
+      // Get the original post to find the author
+      const postDoc = await db.collection("posts").doc(postId).get();
+      if (!postDoc.exists) return;
+
+      const post = postDoc.data();
+      const authorId = post.authorId || post.userId;
+
+      // Don't notify if user reposted their own post
+      if (authorId === reposterId) return;
+
+      // Get author and reposter data
+      const [author, reposter] = await Promise.all([
+        getUserWithPushToken(authorId),
+        getUserWithPushToken(reposterId),
+      ]);
+
+      if (!author || !author.expoPushToken) {
+        console.log("[onNewRepost] No push token for post author");
+        return;
+      }
+
+      const reposterName = reposter?.username || "Someone";
+      const postPreview = post.text ? post.text.substring(0, 50) : "your post";
+
+      await sendExpoPushNotification(
+        author.expoPushToken,
+        "New Repost",
+        `${reposterName} reposted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
+        {
+          type: "repost",
+          postId,
+          fromUserId: reposterId,
+          fromUsername: reposterName,
+        }
+      );
+
+      console.log(`[onNewRepost] Notification sent to ${authorId}`);
+    } catch (error) {
+      console.error("[onNewRepost] Error:", error);
+    }
+  });
+
+/**
+ * Trigger: New post created (for replies)
+ * Sends push notification to the parent post author when someone replies
+ */
+exports.onNewPost = functions.firestore
+  .document("posts/{postId}")
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const replyToPostId = data.replyToPostId;
+
+    // Only process replies (posts with replyToPostId)
+    if (!replyToPostId) return;
+
+    const replierId = data.authorId || data.userId;
+    if (!replierId) return;
+
+    try {
+      // Get the parent post to find the author
+      const parentDoc = await db.collection("posts").doc(replyToPostId).get();
+      if (!parentDoc.exists) return;
+
+      const parentPost = parentDoc.data();
+      const parentAuthorId = parentPost.authorId || parentPost.userId;
+
+      // Don't notify if user replied to their own post
+      if (parentAuthorId === replierId) return;
+
+      // Get parent author and replier data
+      const [parentAuthor, replier] = await Promise.all([
+        getUserWithPushToken(parentAuthorId),
+        getUserWithPushToken(replierId),
+      ]);
+
+      if (!parentAuthor || !parentAuthor.expoPushToken) {
+        console.log("[onNewPost] No push token for parent post author");
+        return;
+      }
+
+      const replierName = replier?.username || "Someone";
+      const replyPreview = data.text ? data.text.substring(0, 50) : "your post";
+
+      await sendExpoPushNotification(
+        parentAuthor.expoPushToken,
+        "New Reply",
+        `${replierName} replied: ${replyPreview}${data.text && data.text.length > 50 ? "..." : ""}`,
+        {
+          type: "reply",
+          postId: context.params.postId,
+          fromUserId: replierId,
+          fromUsername: replierName,
+        }
+      );
+
+      console.log(`[onNewPost] Reply notification sent to ${parentAuthorId}`);
+    } catch (error) {
+      console.error("[onNewPost] Error:", error);
+    }
+  });

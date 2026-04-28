@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Fix Demo Rooms</title>
+  <style>
+    body { font-family: sans-serif; background: #0a0a0a; color: #fff; padding: 40px; max-width: 800px; margin: 0 auto; }
+    h1 { color: #047857; }
+    .status { background: #141414; padding: 12px; margin: 8px 0; border-radius: 8px; }
+    .success { border-left: 3px solid #047857; color: #10b981; }
+    .error { border-left: 3px solid #ef4444; color: #f87171; }
+    .info { border-left: 3px solid #3b82f6; color: #93c5fd; }
+    button { background: #047857; color: #fff; border: none; padding: 16px 24px; border-radius: 8px; cursor: pointer; margin: 8px 8px 8px 0; font-size: 14px; }
+    button:hover { background: #059669; }
+    button.danger { background: #dc2626; }
+    pre { background: #1a1a1a; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Fix Demo Rooms & Cleanup</h1>
+
+  <div>
+    <button onclick="listAllRooms()">1. List All Rooms</button>
+    <button onclick="fixDemoRoomNames()">2. Fix Demo Room Names</button>
+    <button class="danger" onclick="deleteStaleRooms()">3. Delete Stale Rooms</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getFirestore, doc, getDocs, updateDoc, deleteDoc, collection } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const app = initializeApp({
+      apiKey: "AIzaSyDQXCKVagyRi1OhhgjyPgZxoBuPVRD_R8Y",
+      authDomain: "sliprooms-279e3.firebaseapp.com",
+      projectId: "sliprooms-279e3",
+      storageBucket: "sliprooms-279e3.firebasestorage.app",
+      messagingSenderId: "646844776858",
+      appId: "1:646844776858:web:f2ed004f7205318742fa23"
+    });
+
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    function log(msg, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `status ${type}`;
+      div.innerHTML = msg;
+      document.getElementById('log').appendChild(div);
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+
+    async function signIn() {
+      try {
+        await signInWithEmailAndPassword(auth, 'demo@sliprooms.com', 'SlipRooms2026!');
+        return true;
+      } catch (e) {
+        log(`Sign in failed: ${e.message}`, 'error');
+        return false;
+      }
+    }
+
+    // List all rooms
+    window.listAllRooms = async function() {
+      clearLog();
+      if (!await signIn()) return;
+      log('Signed in. Fetching rooms...', 'info');
+
+      try {
+        const snapshot = await getDocs(collection(db, 'rooms'));
+        log(`<strong>Found ${snapshot.size} rooms:</strong>`, 'info');
+
+        snapshot.forEach(docSnap => {
+          const room = docSnap.data();
+          const isDemoRoom = room.isDemoRoom ? ' [DEMO]' : '';
+          const sport = room.sport || 'unknown';
+          log(`<pre>ID: ${docSnap.id}
+Name: ${room.name}
+Sport: ${sport}
+GameId: ${room.gameId}
+GameName: ${room.gameName || 'N/A'}${isDemoRoom}</pre>`, 'info');
+        });
+      } catch (e) {
+        log(`Error: ${e.message}`, 'error');
+      }
+    };
+
+    // Fix demo room names to include team names
+    window.fixDemoRoomNames = async function() {
+      clearLog();
+      if (!await signIn()) return;
+      log('Fixing demo room names...', 'info');
+
+      try {
+        const snapshot = await getDocs(collection(db, 'rooms'));
+        let fixed = 0;
+
+        for (const docSnap of snapshot.docs) {
+          const room = docSnap.data();
+
+          // Fix Luka Doncic room - add Lakers
+          if (room.name && room.name.includes('Luka Doncic') && room.isDemoRoom) {
+            const newName = 'Lakers: Luka Doncic 32.5+ pts';
+            await updateDoc(doc(db, 'rooms', docSnap.id), { name: newName });
+            log(`Updated: "${room.name}" → "${newName}"`, 'success');
+            fixed++;
+          }
+
+          // Fix Zibanejad room - add Rangers
+          if (room.name && room.name.includes('Zibanejad') && room.isDemoRoom) {
+            const newName = 'Rangers: Zibanejad 1.5+ assists';
+            await updateDoc(doc(db, 'rooms', docSnap.id), { name: newName });
+            log(`Updated: "${room.name}" → "${newName}"`, 'success');
+            fixed++;
+          }
+        }
+
+        if (fixed === 0) {
+          log('No demo rooms found to fix. Run "List All Rooms" to see current rooms.', 'info');
+        } else {
+          log(`<strong>Fixed ${fixed} room names!</strong>`, 'success');
+        }
+      } catch (e) {
+        log(`Error: ${e.message}`, 'error');
+      }
+    };
+
+    // Delete stale rooms (Warriors and other non-demo orphans)
+    window.deleteStaleRooms = async function() {
+      clearLog();
+      if (!await signIn()) return;
+      log('Looking for stale rooms to delete...', 'info');
+
+      try {
+        const snapshot = await getDocs(collection(db, 'rooms'));
+        let deleted = 0;
+
+        for (const docSnap of snapshot.docs) {
+          const room = docSnap.data();
+
+          // Skip demo rooms
+          if (room.isDemoRoom) {
+            log(`Skipping demo room: ${room.name}`, 'info');
+            continue;
+          }
+
+          // Delete Warriors room or any other non-demo rooms
+          if (room.name && (room.name.includes('Warriors') || room.name.includes('WARRIORS') || room.name.includes('Golden State'))) {
+            await deleteDoc(doc(db, 'rooms', docSnap.id));
+            log(`Deleted: ${room.name} (${docSnap.id})`, 'success');
+            deleted++;
+          } else {
+            // Check if room is old (created more than 24 hours ago) and not a demo room
+            const createdAt = room.createdAt?.toMillis?.() || room.createdAt?.seconds * 1000 || 0;
+            const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+
+            if (createdAt > 0 && createdAt < oneDayAgo) {
+              await deleteDoc(doc(db, 'rooms', docSnap.id));
+              log(`Deleted old room: ${room.name} (${docSnap.id})`, 'success');
+              deleted++;
+            }
+          }
+        }
+
+        if (deleted === 0) {
+          log('No stale rooms found to delete.', 'info');
+        } else {
+          log(`<strong>Deleted ${deleted} stale rooms!</strong>`, 'success');
+        }
+      } catch (e) {
+        log(`Error: ${e.message}`, 'error');
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAQ - SlipRooms</title>
+  <link rel="icon" type="image/png" href="/images/favicon.png">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background-color: #0a0a0a;
+      color: #ccc;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px 80px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .logo {
+      height: 40px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: #047857;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 2px;
+    }
+    .section {
+      margin-bottom: 36px;
+    }
+    .section-title {
+      color: #666;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      margin-bottom: 16px;
+    }
+    .faq-item {
+      background-color: #141414;
+      border: 1px solid #1f1f1f;
+      border-radius: 12px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .faq-question {
+      padding: 16px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .faq-question:hover {
+      background-color: #1a1a1a;
+    }
+    .faq-question h3 {
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      flex: 1;
+      margin-right: 12px;
+    }
+    .faq-icon {
+      color: #047857;
+      font-size: 20px;
+      transition: transform 0.2s;
+    }
+    .faq-item.open .faq-icon {
+      transform: rotate(180deg);
+    }
+    .faq-answer {
+      display: none;
+      padding: 0 16px 16px;
+      color: #999;
+      font-size: 14px;
+      line-height: 1.7;
+      border-top: 1px solid #222;
+      padding-top: 16px;
+      margin-top: 0;
+    }
+    .faq-item.open .faq-answer {
+      display: block;
+    }
+    a {
+      color: #047857;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      text-align: center;
+      padding-top: 40px;
+      border-top: 1px solid #1a1a1a;
+      margin-top: 40px;
+    }
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 16px;
+    }
+    .footer-links a {
+      color: #888;
+      font-size: 13px;
+    }
+    .footer-links a:hover {
+      color: #047857;
+    }
+    .copyright {
+      color: #444;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <a href="/"><img src="/images/sr-logo.png" alt="SlipRooms" class="logo"></a>
+      <h1>FAQ</h1>
+    </div>
+
+    <div class="section">
+      <p class="section-title">GENERAL</p>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>What is SlipRooms?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          SlipRooms is a social media app for sports bettors. Create or join chat rooms to "sweat" your bets with others in real-time. Share picks, discuss games, and connect with fellow sports fans.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>Is SlipRooms a sportsbook?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          NO. SlipRooms is NOT a sportsbook. We do not accept bets, handle money, or facilitate any gambling transactions. We are a social platform for discussing sports and bets.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>Is SlipRooms free?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Yes, SlipRooms is completely free to use.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>What does "sweating" mean?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          "Sweating" is slang for anxiously watching a game when you have a desired outcome. On SlipRooms, you sweat together with others who share the same rooting interest.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">ACCOUNT</p>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How old do I have to be to use SlipRooms?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          You must be at least 18 years old to use SlipRooms.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>Can I change my username/handle?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          No, your @handle is permanent and cannot be changed. However, you can change your display name at any time.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How do I delete my account?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Go to Settings and select "Delete Account" or contact <a href="mailto:sliprooms@gmail.com">sliprooms@gmail.com</a>.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">ROOMS</p>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How do I create a room?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Tap "Create Room" from the Hub, select a sport, pick a game, choose your bet type, and create your room.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How long do rooms last?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Rooms automatically close shortly after the game ends.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>Can I be in multiple rooms at once?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Yes, you can join as many rooms as you want.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">THE FLOOR (FEED)</p>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>What is The Floor?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          The Floor is our social feed where you can post updates, share picks, and interact with other users - similar to Twitter.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>What is the difference between Friends and Discover?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          The Friends tab shows posts from people you follow. The Discover tab shows trending posts from public accounts.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">SAFETY & CONTACT</p>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How do I report a user?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Tap on their profile and select "Report User" or contact <a href="mailto:sliprooms@gmail.com">sliprooms@gmail.com</a>.
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How do I block someone?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Tap on their profile and select "Block User."
+        </div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-question" onclick="toggleFaq(this)">
+          <h3>How do I contact support?</h3>
+          <span class="faq-icon">&#9660;</span>
+        </div>
+        <div class="faq-answer">
+          Email us at <a href="mailto:sliprooms@gmail.com">sliprooms@gmail.com</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="footer-links">
+        <a href="/">Home</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms of Service</a>
+        <a href="/faq">FAQ</a>
+        <a href="mailto:sliprooms@gmail.com?subject=SlipRooms%20Support">Contact Us</a>
+      </div>
+      <p class="copyright">&copy; 2026 Pocket Basement LLC. All rights reserved.</p>
+    </div>
+  </div>
+
+  <script>
+    function toggleFaq(element) {
+      const item = element.parentElement;
+      item.classList.toggle('open');
+    }
+  </script>
+</body>
+</html>

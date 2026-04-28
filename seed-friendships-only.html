@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Seed Friendships Only - SlipRooms</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      padding: 40px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1 { color: #047857; }
+    .status {
+      background: #141414;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin: 8px 0;
+      border-left: 3px solid #333;
+    }
+    .success { border-left-color: #047857; color: #10b981; }
+    .error { border-left-color: #ef4444; color: #f87171; }
+    .info { border-left-color: #3b82f6; color: #93c5fd; }
+    button {
+      background: #047857;
+      color: #fff;
+      border: none;
+      padding: 16px 32px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    button:hover { background: #059669; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>Seed Friendships Only</h1>
+  <p>Creates bidirectional friendships between demo account and 5 fake users.</p>
+
+  <button id="btn" onclick="seedFriendships()">Create Friendships</button>
+  <div id="log"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDocs, collection, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDQXCKVagyRi1OhhgjyPgZxoBuPVRD_R8Y",
+      authDomain: "sliprooms-279e3.firebaseapp.com",
+      projectId: "sliprooms-279e3",
+      storageBucket: "sliprooms-279e3.firebasestorage.app",
+      messagingSenderId: "646844776858",
+      appId: "1:646844776858:web:f2ed004f7205318742fa23"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const DEMO_UID = "oKQej2e1zyMszsxxr3jDePR8fV42";
+
+    const FAKE_USERNAMES = ["sweatking", "parlaypete", "puckmoney", "chalkeater", "livebetlarry"];
+
+    function log(msg, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `status ${type}`;
+      div.innerHTML = msg;
+      document.getElementById('log').appendChild(div);
+    }
+
+    window.seedFriendships = async function() {
+      const btn = document.getElementById('btn');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      document.getElementById('log').innerHTML = '';
+
+      try {
+        // Sign in as demo user
+        await signInWithEmailAndPassword(auth, 'demo@sliprooms.com', 'SlipRooms2026!');
+        log('Signed in as demo user', 'success');
+
+        // Get fake user UIDs from their usernames
+        for (const username of FAKE_USERNAMES) {
+          try {
+            // Look up user by username
+            const usersQuery = query(collection(db, 'users'), where('username', '==', username));
+            const snapshot = await getDocs(usersQuery);
+
+            if (snapshot.empty) {
+              log(`User @${username} not found, skipping`, 'error');
+              continue;
+            }
+
+            const fakeUserDoc = snapshot.docs[0];
+            const fakeUserId = fakeUserDoc.id;
+
+            // Create friendship: demo -> fake user
+            const friendship1Id = `${DEMO_UID}_${fakeUserId}`;
+            await setDoc(doc(db, 'friendships', friendship1Id), {
+              users: [DEMO_UID, fakeUserId],
+              user1: DEMO_UID,
+              user2: fakeUserId,
+              createdAt: serverTimestamp()
+            });
+
+            // Create friendship: fake user -> demo
+            const friendship2Id = `${fakeUserId}_${DEMO_UID}`;
+            await setDoc(doc(db, 'friendships', friendship2Id), {
+              users: [fakeUserId, DEMO_UID],
+              user1: fakeUserId,
+              user2: DEMO_UID,
+              createdAt: serverTimestamp()
+            });
+
+            log(`Friends: @appreview <-> @${username}`, 'success');
+          } catch (error) {
+            log(`Error with @${username}: ${error.message}`, 'error');
+          }
+        }
+
+        log('<strong>Done! Friendships created.</strong>', 'success');
+      } catch (error) {
+        log(`Error: ${error.message}`, 'error');
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Create Friendships';
+    };
+  </script>
+</body>
+</html>

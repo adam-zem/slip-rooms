@@ -1,0 +1,24 @@
+{
+  "name": "sliprooms-functions",
+  "description": "Cloud Functions for SlipRooms",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "acorn": "^8.14.1",
+    "firebase-admin": "^11.11.1",
+    "firebase-functions": "^4.5.0",
+    "markdown-it": "^14.1.0",
+    "resend": "^6.10.0"
+  },
+  "private": true
+}
