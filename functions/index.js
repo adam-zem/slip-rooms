@@ -1328,6 +1328,208 @@ exports.onNewPost = functions.firestore
     }
   });
 
+// ==================== ADMIN/MOD BROADCAST SYSTEM ====================
+
+/**
+ * Send broadcast push notification to all eligible users
+ * Callable function for admins and mods only
+ *
+ * @param {string} title - Notification title (1-80 chars)
+ * @param {string} body - Notification body (1-200 chars)
+ * @param {object|null} deepLink - Optional deep link target
+ *   - null: no deep link
+ *   - { type: "room", roomId: string }
+ *   - { type: "post", postId: string }
+ *   - { type: "createRoom" }
+ *   - { type: "floor" }
+ */
+exports.sendBroadcast = functions.https.onCall(async (data, context) => {
+  // 1. Verify authentication
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "Must be authenticated to send broadcasts."
+    );
+  }
+
+  const callerUid = context.auth.uid;
+
+  // 2. Server-side admin/mod verification
+  const callerDoc = await db.collection("users").doc(callerUid).get();
+  if (!callerDoc.exists) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "User profile not found."
+    );
+  }
+
+  const callerData = callerDoc.data();
+  const isAdminOrMod = callerData.isAdmin === true || callerData.isMod === true;
+  if (!isAdminOrMod) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "Only admins and mods can send broadcasts."
+    );
+  }
+
+  // 3. Validate inputs
+  const { title, body, deepLink } = data;
+
+  if (!title || typeof title !== "string" || title.length < 1 || title.length > 80) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Title is required and must be 1-80 characters."
+    );
+  }
+
+  if (!body || typeof body !== "string" || body.length < 1 || body.length > 200) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Body is required and must be 1-200 characters."
+    );
+  }
+
+  // Validate deepLink if provided
+  if (deepLink !== null && deepLink !== undefined) {
+    const validTypes = ["room", "post", "createRoom", "floor"];
+    if (!deepLink.type || !validTypes.includes(deepLink.type)) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Invalid deep link type. Must be one of: room, post, createRoom, floor."
+      );
+    }
+    if (deepLink.type === "room" && !deepLink.roomId) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "roomId is required for room deep links."
+      );
+    }
+    if (deepLink.type === "post" && !deepLink.postId) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "postId is required for post deep links."
+      );
+    }
+  }
+
+  try {
+    // 4. Query eligible users
+    // Get all users with valid push tokens
+    const usersSnapshot = await db.collection("users").get();
+    const callerBlockedUsers = callerData.blockedUsers || [];
+    const callerBlockedIds = new Set(callerBlockedUsers.map((b) => b.id));
+
+    const eligibleTokens = [];
+
+    for (const userDoc of usersSnapshot.docs) {
+      const userId = userDoc.id;
+      const userData = userDoc.data();
+
+      // Skip self
+      if (userId === callerUid) continue;
+
+      // Check valid push token
+      const token = userData.expoPushToken;
+      if (!token || !token.startsWith("ExponentPushToken[")) continue;
+
+      // Check notification preferences (default to true)
+      const prefs = userData.notificationPreferences || {};
+      if (prefs.broadcasts === false) continue;
+
+      // Check if user blocked caller
+      const userBlockedUsers = userData.blockedUsers || [];
+      const userBlockedCaller = userBlockedUsers.some((b) => b.id === callerUid);
+      if (userBlockedCaller) continue;
+
+      // Check if caller blocked user
+      if (callerBlockedIds.has(userId)) continue;
+
+      eligibleTokens.push(token);
+    }
+
+    if (eligibleTokens.length === 0) {
+      console.log("[sendBroadcast] No eligible recipients");
+      // Still write audit log
+      await db.collection("broadcasts").add({
+        senderUid: callerUid,
+        senderUsername: callerData.username || callerUid,
+        title,
+        body,
+        deepLink: deepLink || null,
+        recipientCount: 0,
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { success: true, recipientCount: 0 };
+    }
+
+    // 5. Build push payload
+    const pushData = { type: "broadcast" };
+    if (deepLink) {
+      pushData.deepLinkType = deepLink.type;
+      if (deepLink.type === "room" && deepLink.roomId) {
+        pushData.roomId = deepLink.roomId;
+      }
+      if (deepLink.type === "post" && deepLink.postId) {
+        pushData.postId = deepLink.postId;
+      }
+    }
+
+    // 6. Send pushes in chunks of 100
+    const CHUNK_SIZE = 100;
+    const messages = eligibleTokens.map((token) => ({
+      to: token,
+      sound: "default",
+      title,
+      body,
+      data: pushData,
+    }));
+
+    for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+      const chunk = messages.slice(i, i + CHUNK_SIZE);
+      try {
+        const response = await fetch("https://exp.host/--/api/v2/push/send", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Accept-Encoding": "gzip, deflate",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(chunk),
+        });
+        const result = await response.json();
+        console.log(`[sendBroadcast] Chunk ${i / CHUNK_SIZE + 1} sent:`, result);
+      } catch (chunkError) {
+        console.error(`[sendBroadcast] Error sending chunk ${i / CHUNK_SIZE + 1}:`, chunkError);
+      }
+    }
+
+    // 7. Write audit log
+    await db.collection("broadcasts").add({
+      senderUid: callerUid,
+      senderUsername: callerData.username || callerUid,
+      title,
+      body,
+      deepLink: deepLink || null,
+      recipientCount: eligibleTokens.length,
+      sentAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log(`[sendBroadcast] Broadcast sent by ${callerData.username} to ${eligibleTokens.length} users`);
+
+    // 8. Return success
+    return {
+      success: true,
+      recipientCount: eligibleTokens.length,
+    };
+  } catch (error) {
+    console.error("[sendBroadcast] Error:", error);
+    throw new functions.https.HttpsError(
+      "internal",
+      `Failed to send broadcast: ${error.message}`
+    );
+  }
+});
+
 /**
  * Trigger: New DM message created
  * Sends push notification to the recipient
