@@ -1006,6 +1006,83 @@ async function getUserWithPushToken(userId) {
 }
 
 /**
+ * Check if we should send a notification to a user
+ * Returns the recipient's expoPushToken if all checks pass, else null
+ *
+ * Checks:
+ * 1. recipientUid !== actorUid (not self-action)
+ * 2. Neither user has blocked the other
+ * 3. recipient's notificationPreferences[notifType] !== false
+ * 4. recipient has a valid expoPushToken
+ *
+ * @param {string} recipientUid - The user who would receive the notification
+ * @param {string} actorUid - The user who performed the action
+ * @param {string} notifType - The notification type (follows, upvotes, reposts, replies, mentions, dms, dislikes)
+ * @returns {Promise<{allowed: boolean, token: string|null, recipientData: object|null, actorData: object|null}>}
+ */
+async function shouldNotifyUser(recipientUid, actorUid, notifType) {
+  // Check 1: Not self-action
+  if (!recipientUid || !actorUid || recipientUid === actorUid) {
+    return { allowed: false, token: null, recipientData: null, actorData: null };
+  }
+
+  try {
+    // Fetch both users in parallel
+    const [recipientDoc, actorDoc] = await Promise.all([
+      db.collection("users").doc(recipientUid).get(),
+      db.collection("users").doc(actorUid).get(),
+    ]);
+
+    if (!recipientDoc.exists) {
+      return { allowed: false, token: null, recipientData: null, actorData: null };
+    }
+
+    const recipientData = { id: recipientUid, ...recipientDoc.data() };
+    const actorData = actorDoc.exists ? { id: actorUid, ...actorDoc.data() } : null;
+
+    // Check 2: Neither user has blocked the other
+    // blockedUsers is an array of objects with {id, username, ...}
+    const recipientBlockedUsers = recipientData.blockedUsers || [];
+    const actorBlockedUsers = actorData?.blockedUsers || [];
+
+    // Check if recipient blocked actor
+    const recipientBlockedActor = recipientBlockedUsers.some((b) => b.id === actorUid);
+    if (recipientBlockedActor) {
+      console.log(`[shouldNotifyUser] Blocked: recipient ${recipientUid} blocked actor ${actorUid}`);
+      return { allowed: false, token: null, recipientData, actorData };
+    }
+
+    // Check if actor blocked recipient
+    const actorBlockedRecipient = actorBlockedUsers.some((b) => b.id === recipientUid);
+    if (actorBlockedRecipient) {
+      console.log(`[shouldNotifyUser] Blocked: actor ${actorUid} blocked recipient ${recipientUid}`);
+      return { allowed: false, token: null, recipientData, actorData };
+    }
+
+    // Check 3: Notification preferences
+    // Default to true if preferences don't exist or key is missing
+    const prefs = recipientData.notificationPreferences || {};
+    const prefValue = prefs[notifType];
+    if (prefValue === false) {
+      console.log(`[shouldNotifyUser] Disabled: recipient ${recipientUid} has ${notifType} notifications off`);
+      return { allowed: false, token: null, recipientData, actorData };
+    }
+
+    // Check 4: Valid push token
+    const token = recipientData.expoPushToken;
+    if (!token || !token.startsWith("ExponentPushToken[")) {
+      console.log(`[shouldNotifyUser] No valid push token for ${recipientUid}`);
+      return { allowed: false, token: null, recipientData, actorData };
+    }
+
+    return { allowed: true, token, recipientData, actorData };
+  } catch (error) {
+    console.error("[shouldNotifyUser] Error:", error);
+    return { allowed: false, token: null, recipientData: null, actorData: null };
+  }
+}
+
+/**
  * Trigger: New follower created
  * Sends push notification to the user being followed
  */
@@ -1016,24 +1093,17 @@ exports.onNewFollower = functions.firestore
     const followerId = data.user1; // The user doing the following
     const followedId = data.user2; // The user being followed
 
-    if (!followerId || !followedId || followerId === followedId) return;
+    if (!followerId || !followedId) return;
 
     try {
-      // Get both users' data
-      const [follower, followed] = await Promise.all([
-        getUserWithPushToken(followerId),
-        getUserWithPushToken(followedId),
-      ]);
+      // Check if we should notify (handles self-action, blocks, prefs, token)
+      const { allowed, token, actorData } = await shouldNotifyUser(followedId, followerId, "follows");
+      if (!allowed) return;
 
-      if (!followed || !followed.expoPushToken) {
-        console.log("[onNewFollower] No push token for followed user");
-        return;
-      }
-
-      const followerName = follower?.username || "Someone";
+      const followerName = actorData?.username || "Someone";
 
       await sendExpoPushNotification(
-        followed.expoPushToken,
+        token,
         "New Follower",
         `${followerName} started following you`,
         {
@@ -1070,25 +1140,15 @@ exports.onNewLike = functions.firestore
       const post = postDoc.data();
       const authorId = post.authorId || post.userId;
 
-      // Don't notify if user liked their own post
-      if (authorId === likerId) return;
+      // Check if we should notify (handles self-action, blocks, prefs, token)
+      const { allowed, token, actorData } = await shouldNotifyUser(authorId, likerId, "upvotes");
+      if (!allowed) return;
 
-      // Get author and liker data
-      const [author, liker] = await Promise.all([
-        getUserWithPushToken(authorId),
-        getUserWithPushToken(likerId),
-      ]);
-
-      if (!author || !author.expoPushToken) {
-        console.log("[onNewLike] No push token for post author");
-        return;
-      }
-
-      const likerName = liker?.username || "Someone";
+      const likerName = actorData?.username || "Someone";
       const postPreview = post.text ? post.text.substring(0, 50) : "your post";
 
       await sendExpoPushNotification(
-        author.expoPushToken,
+        token,
         "New Upvote",
         `${likerName} upvoted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
         {
@@ -1126,25 +1186,15 @@ exports.onNewRepost = functions.firestore
       const post = postDoc.data();
       const authorId = post.authorId || post.userId;
 
-      // Don't notify if user reposted their own post
-      if (authorId === reposterId) return;
+      // Check if we should notify (handles self-action, blocks, prefs, token)
+      const { allowed, token, actorData } = await shouldNotifyUser(authorId, reposterId, "reposts");
+      if (!allowed) return;
 
-      // Get author and reposter data
-      const [author, reposter] = await Promise.all([
-        getUserWithPushToken(authorId),
-        getUserWithPushToken(reposterId),
-      ]);
-
-      if (!author || !author.expoPushToken) {
-        console.log("[onNewRepost] No push token for post author");
-        return;
-      }
-
-      const reposterName = reposter?.username || "Someone";
+      const reposterName = actorData?.username || "Someone";
       const postPreview = post.text ? post.text.substring(0, 50) : "your post";
 
       await sendExpoPushNotification(
-        author.expoPushToken,
+        token,
         "New Repost",
         `${reposterName} reposted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
         {
@@ -1162,60 +1212,186 @@ exports.onNewRepost = functions.firestore
   });
 
 /**
- * Trigger: New post created (for replies)
- * Sends push notification to the parent post author when someone replies
+ * Trigger: New post created
+ * Handles two types of notifications:
+ * 1. Reply notifications - when someone replies to a post
+ * 2. Mention notifications - when someone is @mentioned in a post
  */
 exports.onNewPost = functions.firestore
   .document("posts/{postId}")
   .onCreate(async (snap, context) => {
     const data = snap.data();
-    const replyToPostId = data.replyToPostId;
+    const postId = context.params.postId;
+    const authorId = data.authorId || data.userId;
+    const postText = data.text || "";
 
-    // Only process replies (posts with replyToPostId)
-    if (!replyToPostId) return;
-
-    const replierId = data.authorId || data.userId;
-    if (!replierId) return;
+    if (!authorId) return;
 
     try {
-      // Get the parent post to find the author
-      const parentDoc = await db.collection("posts").doc(replyToPostId).get();
-      if (!parentDoc.exists) return;
+      // Get the author's data once for use in notifications
+      const authorDoc = await db.collection("users").doc(authorId).get();
+      const authorData = authorDoc.exists ? authorDoc.data() : null;
+      const authorUsername = authorData?.username || "Someone";
 
-      const parentPost = parentDoc.data();
-      const parentAuthorId = parentPost.authorId || parentPost.userId;
+      // Track who we've already notified to avoid duplicates
+      const notifiedUsers = new Set();
 
-      // Don't notify if user replied to their own post
-      if (parentAuthorId === replierId) return;
+      // ========== REPLY NOTIFICATION ==========
+      const replyToPostId = data.replyToPostId;
+      if (replyToPostId) {
+        const parentDoc = await db.collection("posts").doc(replyToPostId).get();
+        if (parentDoc.exists) {
+          const parentPost = parentDoc.data();
+          const parentAuthorId = parentPost.authorId || parentPost.userId;
 
-      // Get parent author and replier data
-      const [parentAuthor, replier] = await Promise.all([
-        getUserWithPushToken(parentAuthorId),
-        getUserWithPushToken(replierId),
-      ]);
+          // Check if we should notify parent author
+          const { allowed, token } = await shouldNotifyUser(parentAuthorId, authorId, "replies");
+          if (allowed) {
+            const replyPreview = postText ? postText.substring(0, 50) : "your post";
 
-      if (!parentAuthor || !parentAuthor.expoPushToken) {
-        console.log("[onNewPost] No push token for parent post author");
+            await sendExpoPushNotification(
+              token,
+              "New Reply",
+              `${authorUsername} replied: ${replyPreview}${postText.length > 50 ? "..." : ""}`,
+              {
+                type: "reply",
+                postId,
+                fromUserId: authorId,
+                fromUsername: authorUsername,
+              }
+            );
+
+            console.log(`[onNewPost] Reply notification sent to ${parentAuthorId}`);
+            notifiedUsers.add(parentAuthorId);
+          }
+        }
+      }
+
+      // ========== MENTION NOTIFICATIONS ==========
+      // Parse @mentions from post text using regex
+      const mentionRegex = /@([a-zA-Z0-9_]+)/g;
+      const mentions = [];
+      let match;
+      while ((match = mentionRegex.exec(postText)) !== null) {
+        mentions.push(match[1].toLowerCase());
+      }
+
+      if (mentions.length === 0) return;
+
+      // Remove duplicates and limit to prevent abuse
+      const uniqueMentions = [...new Set(mentions)].slice(0, 10);
+
+      // Look up users by username
+      for (const username of uniqueMentions) {
+        try {
+          // Query for user by username
+          const usersQuery = await db.collection("users")
+            .where("username", "==", username)
+            .limit(1)
+            .get();
+
+          if (usersQuery.empty) continue;
+
+          const mentionedUser = usersQuery.docs[0];
+          const mentionedUserId = mentionedUser.id;
+
+          // Skip if already notified (e.g., they're also the parent author who got reply notif)
+          if (notifiedUsers.has(mentionedUserId)) {
+            console.log(`[onNewPost] Skipping mention for ${mentionedUserId} - already notified`);
+            continue;
+          }
+
+          // Check if we should notify this mentioned user
+          const { allowed, token } = await shouldNotifyUser(mentionedUserId, authorId, "mentions");
+          if (!allowed) continue;
+
+          await sendExpoPushNotification(
+            token,
+            "New Mention",
+            `${authorUsername} mentioned you`,
+            {
+              type: "mention",
+              postId,
+              fromUserId: authorId,
+              fromUsername: authorUsername,
+            }
+          );
+
+          console.log(`[onNewPost] Mention notification sent to ${mentionedUserId} (@${username})`);
+          notifiedUsers.add(mentionedUserId);
+        } catch (mentionError) {
+          console.error(`[onNewPost] Error processing mention @${username}:`, mentionError);
+        }
+      }
+    } catch (error) {
+      console.error("[onNewPost] Error:", error);
+    }
+  });
+
+/**
+ * Trigger: New DM message created
+ * Sends push notification to the recipient
+ */
+exports.onNewDM = functions.firestore
+  .document("conversations/{conversationId}/messages/{messageId}")
+  .onCreate(async (snap, context) => {
+    const message = snap.data();
+    const conversationId = context.params.conversationId;
+    const senderId = message.senderId;
+
+    if (!senderId || !conversationId) return;
+
+    try {
+      // Get the conversation to find the recipient
+      const conversationDoc = await db.collection("conversations").doc(conversationId).get();
+      if (!conversationDoc.exists) {
+        console.log("[onNewDM] Conversation not found");
         return;
       }
 
-      const replierName = replier?.username || "Someone";
-      const replyPreview = data.text ? data.text.substring(0, 50) : "your post";
+      const conversation = conversationDoc.data();
+      const participants = conversation.participants || [];
+
+      // Find the recipient (the participant who is NOT the sender)
+      const recipientId = participants.find((p) => p !== senderId);
+      if (!recipientId) {
+        console.log("[onNewDM] No recipient found in conversation");
+        return;
+      }
+
+      // Check if we should notify (handles self-action, blocks, prefs, token)
+      const { allowed, token, actorData } = await shouldNotifyUser(recipientId, senderId, "dms");
+      if (!allowed) return;
+
+      const senderName = actorData?.username || "Someone";
+
+      // Build the message preview
+      let messagePreview;
+      if (message.type === "image" || message.imageUrl) {
+        messagePreview = "Sent an image";
+      } else if (message.type === "gif" || message.gifUrl) {
+        messagePreview = "Sent a GIF";
+      } else if (message.sharedContent) {
+        messagePreview = `Shared a ${message.sharedContent.type || "link"}`;
+      } else {
+        const text = message.text || "";
+        messagePreview = text.length > 100 ? text.substring(0, 100) + "..." : text;
+      }
 
       await sendExpoPushNotification(
-        parentAuthor.expoPushToken,
-        "New Reply",
-        `${replierName} replied: ${replyPreview}${data.text && data.text.length > 50 ? "..." : ""}`,
+        token,
+        senderName, // Title is just the sender's username
+        messagePreview,
         {
-          type: "reply",
-          postId: context.params.postId,
-          fromUserId: replierId,
-          fromUsername: replierName,
+          type: "dm",
+          conversationId,
+          fromUserId: senderId,
+          fromUsername: senderName,
         }
       );
 
-      console.log(`[onNewPost] Reply notification sent to ${parentAuthorId}`);
+      console.log(`[onNewDM] Notification sent to ${recipientId}`);
     } catch (error) {
-      console.error("[onNewPost] Error:", error);
+      console.error("[onNewDM] Error:", error);
     }
   });
