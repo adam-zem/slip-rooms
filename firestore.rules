@@ -90,10 +90,24 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow create: if request.auth != null
         && request.resource.data.authorId == request.auth.uid;
-      // Author can update anything; any auth user can update ONLY metrics fields
+      // Author can update anything; any auth user can update ONLY engagement fields
       allow update: if request.auth != null
         && (resource.data.authorId == request.auth.uid
-            || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['metrics']));
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'metrics',
+                'upvotes',
+                'thumbsUp',
+                'thumbsUpCount',
+                'downvotes',
+                'thumbsDown',
+                'thumbsDownCount',
+                'voteScore',
+                'reposts',
+                'repostsCount',
+                'replies',
+                'repliesCount',
+                'commentsCount'
+              ]));
       allow delete: if request.auth != null
         && (resource.data.authorId == request.auth.uid
             || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
