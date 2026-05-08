@@ -84,5 +84,12 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if false;
     }
+
+    // CATCH-ALL fallback — TEMPORARY restore for production
+    // Allows authenticated users to read/write any other collection not covered above.
+    // TODO: Replace with explicit per-collection rules
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
   }
 }
