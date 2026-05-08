@@ -154,6 +154,50 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Notifications collection - user notification inbox
+    match /notifications/{notificationId} {
+      // Only the owner (user the notif is for) can read
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      // Anyone authenticated can create notifications (because actors create notifs for other users)
+      allow create: if request.auth != null;
+      // Only the owner can update (e.g., marking as read)
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      // Only the owner can delete
+      allow delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // Conversations collection - DM threads
+    match /conversations/{conversationId} {
+      // Only participants can read the conversation
+      allow read: if request.auth != null
+        && request.auth.uid in resource.data.participants;
+      // Only allow creating conversations that include the creator as a participant
+      allow create: if request.auth != null
+        && request.auth.uid in request.resource.data.participants;
+      // Only participants can update (e.g., updating lastMessage, unread counts, etc.)
+      allow update: if request.auth != null
+        && request.auth.uid in resource.data.participants;
+      // No deletes for now (DMs aren't user-deletable yet)
+      allow delete: if false;
+
+      // Messages subcollection - same participant gating
+      match /messages/{messageId} {
+        // Only conversation participants can read messages
+        allow read: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        // Only conversation participants AND only as the sender can create messages
+        allow create: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          && request.resource.data.senderId == request.auth.uid;
+        // No edits, no deletes (per Jake — both planned for future)
+        allow update: if false;
+        allow delete: if false;
+      }
+    }
+
     // CATCH-ALL fallback — TEMPORARY restore for production
     // Allows authenticated users to read/write any other collection not covered above.
     // TODO: Replace with explicit per-collection rules
