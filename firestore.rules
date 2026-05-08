@@ -198,6 +198,67 @@ service cloud.firestore {
       }
     }
 
+    // Reports collection - user-submitted reports for moderation review
+    match /reports/{reportId} {
+      // Only admins and mods can read reports
+      allow read: if request.auth != null
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isMod == true);
+      // Any authenticated user can submit a report
+      allow create: if request.auth != null;
+      // Only admins and mods can update (mark resolved, etc.) or delete
+      allow update, delete: if request.auth != null
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isMod == true);
+    }
+
+    // Admin logs - audit log of admin actions
+    match /adminLogs/{logId} {
+      // Only admins can read or write
+      allow read: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow write: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Banned words - admin-managed filter list
+    match /bannedWords/{wordId} {
+      // Any authenticated user can read (frontend filter check)
+      allow read: if request.auth != null;
+      // Only admins can write
+      allow write: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Filter logs - logs of filter violations
+    match /filterLogs/{logId} {
+      // Only admins can read
+      allow read: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      // Any authenticated user can create (frontend logs the violation)
+      allow create: if request.auth != null;
+      // Only admins can update or delete
+      allow update, delete: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Presence - online/offline status tracking
+    match /presence/{userId} {
+      // Any authenticated user can read presence
+      allow read: if request.auth != null;
+      // Only the user themselves can write their own presence
+      allow write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    // Friends collection - cleanup collection
+    match /friends/{friendId} {
+      // Any authenticated user can read (in case any frontend uses this)
+      allow read: if request.auth != null;
+      // Any authenticated user can write (matches existing friendships rule pattern)
+      allow write: if request.auth != null;
+    }
+
     // CATCH-ALL fallback — TEMPORARY restore for production
     // Allows authenticated users to read/write any other collection not covered above.
     // TODO: Replace with explicit per-collection rules
