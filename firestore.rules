@@ -12,9 +12,9 @@ service cloud.firestore {
     // Rooms collection - any authenticated user can read/update rooms, only admins can create/delete
     match /rooms/{roomId} {
       allow read: if request.auth != null;
-      // Only admins can create rooms
+      // Authenticated users can create rooms (must set createdBy to their own uid)
       allow create: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+        && request.resource.data.createdBy == request.auth.uid;
       allow update: if request.auth != null; // For userCount/presence tracking
       // Only admins can delete rooms
       allow delete: if request.auth != null
