@@ -95,15 +95,6 @@ service cloud.firestore {
         && (resource.data.oddieid == request.auth.uid || resource.data.userId == request.auth.uid);
     }
 
-    // Dislikes collection - downvote tracking
-    match /dislikes/{dislikeId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && request.resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn()
-        && resource.data.userId == request.auth.uid;
-    }
-
     // Reposts collection - repost tracking
     match /reposts/{repostId} {
       allow read: if isSignedIn();
