@@ -1597,3 +1597,189 @@ exports.onNewDM = functions.firestore
       console.error("[onNewDM] Error:", error);
     }
   });
+
+// ==================== ROOM CLEANUP ====================
+
+const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports";
+
+// Map sport IDs to ESPN endpoints
+const SPORT_ENDPOINTS = {
+  nfl: `${ESPN_BASE}/football/nfl/scoreboard`,
+  nba: `${ESPN_BASE}/basketball/nba/scoreboard`,
+  ncaab: `${ESPN_BASE}/basketball/mens-college-basketball/scoreboard?groups=100&limit=100`,
+  mlb: `${ESPN_BASE}/baseball/mlb/scoreboard`,
+  nhl: `${ESPN_BASE}/hockey/nhl/scoreboard`,
+  wnba: `${ESPN_BASE}/basketball/wnba/scoreboard`,
+  soccer: `${ESPN_BASE}/soccer/usa.1/scoreboard`,
+  ufc: `${ESPN_BASE}/mma/ufc/scoreboard`,
+};
+
+/**
+ * Fetch games from ESPN for a specific sport
+ * @param {string} sportId - Sport identifier (nba, nfl, mlb, etc.)
+ * @returns {Promise<Array>} - Array of games with id and status
+ */
+async function fetchESPNGames(sportId) {
+  const endpoint = SPORT_ENDPOINTS[sportId];
+  if (!endpoint) {
+    console.log(`[cleanupFinishedRooms] No ESPN endpoint for sport: ${sportId}`);
+    return [];
+  }
+
+  try {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      console.error(`[cleanupFinishedRooms] ESPN ${sportId} returned ${response.status}`);
+      return [];
+    }
+    const data = await response.json();
+    return (data.events || []).map((event) => ({
+      id: event.id,
+      name: event.name,
+      status: event.status,
+    }));
+  } catch (error) {
+    console.error(`[cleanupFinishedRooms] Failed to fetch ${sportId}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Check if a game has ended (status.type.id === "3" or state === "post")
+ * @param {object} game - ESPN game object
+ * @returns {boolean}
+ */
+function isGameFinal(game) {
+  const statusId = game.status?.type?.id;
+  const state = game.status?.type?.state;
+  return statusId === "3" || state === "post";
+}
+
+/**
+ * Scheduled function: Clean up rooms for finished games
+ * Runs every 5 minutes, America/New_York timezone
+ *
+ * Logic:
+ * 1. Query all rooms in Firestore
+ * 2. Group by sport and fetch ESPN scoreboards for those sports
+ * 3. Delete rooms where game has ended (unless isDemoRoom)
+ */
+exports.cleanupFinishedRooms = functions.pubsub
+  .schedule("every 5 minutes")
+  .timeZone("America/New_York")
+  .onRun(async (context) => {
+    console.log("[cleanupFinishedRooms] Starting scheduled cleanup...");
+
+    try {
+      // Step 1: Get all rooms
+      const roomsSnapshot = await db.collection("rooms").get();
+
+      if (roomsSnapshot.empty) {
+        console.log("[cleanupFinishedRooms] No rooms to check");
+        return null;
+      }
+
+      console.log(`[cleanupFinishedRooms] Found ${roomsSnapshot.size} rooms`);
+
+      // Step 2: Group rooms by sport and gameId
+      const roomsByGame = {}; // { gameId: [rooms] }
+      const sportsNeeded = new Set();
+
+      roomsSnapshot.docs.forEach((docSnap) => {
+        const room = { id: docSnap.id, ...docSnap.data() };
+        const gameId = room.gameId;
+        const sport = room.sport;
+
+        if (!gameId) return; // Skip rooms without gameId
+
+        if (!roomsByGame[gameId]) {
+          roomsByGame[gameId] = [];
+        }
+        roomsByGame[gameId].push(room);
+
+        if (sport && SPORT_ENDPOINTS[sport]) {
+          sportsNeeded.add(sport);
+        }
+      });
+
+      const gameIds = Object.keys(roomsByGame);
+      console.log(`[cleanupFinishedRooms] ${gameIds.length} unique games, sports: ${[...sportsNeeded].join(", ")}`);
+
+      // Step 3: Fetch ESPN data for needed sports (in parallel)
+      const gameMap = {}; // { gameId: game }
+      const sportResults = {};
+
+      await Promise.all(
+        [...sportsNeeded].map(async (sport) => {
+          const games = await fetchESPNGames(sport);
+          sportResults[sport] = games.length;
+          games.forEach((game) => {
+            gameMap[game.id] = game;
+          });
+        })
+      );
+
+      console.log("[cleanupFinishedRooms] ESPN fetch results:", sportResults);
+      console.log(`[cleanupFinishedRooms] Total games in map: ${Object.keys(gameMap).length}`);
+
+      // Step 4: Identify rooms to delete
+      const roomsToDelete = [];
+      const deletedGameIds = [];
+
+      for (const gameId of gameIds) {
+        const game = gameMap[gameId];
+        const rooms = roomsByGame[gameId];
+
+        if (!game) {
+          // Game not found in ESPN - might be old, but don't delete without confirmation
+          // (The mobile app handles orphaned rooms with 4-hour check)
+          continue;
+        }
+
+        if (isGameFinal(game)) {
+          for (const room of rooms) {
+            // Skip demo rooms
+            if (room.isDemoRoom === true) {
+              console.log(`[cleanupFinishedRooms] Skipping demo room: ${room.name}`);
+              continue;
+            }
+            roomsToDelete.push(room);
+            if (!deletedGameIds.includes(gameId)) {
+              deletedGameIds.push(gameId);
+            }
+          }
+        }
+      }
+
+      console.log(`[cleanupFinishedRooms] Rooms to delete: ${roomsToDelete.length}`);
+
+      if (roomsToDelete.length === 0) {
+        console.log("[cleanupFinishedRooms] No rooms to delete");
+        return null;
+      }
+
+      // Step 5: Delete in batches (max 500 per batch)
+      let totalDeleted = 0;
+
+      for (let i = 0; i < roomsToDelete.length; i += BATCH_SIZE) {
+        const batchRooms = roomsToDelete.slice(i, i + BATCH_SIZE);
+        const batch = db.batch();
+
+        batchRooms.forEach((room) => {
+          console.log(`[cleanupFinishedRooms] Deleting: "${room.name}" (gameId: ${room.gameId})`);
+          batch.delete(db.collection("rooms").doc(room.id));
+        });
+
+        await batch.commit();
+        totalDeleted += batchRooms.length;
+      }
+
+      console.log(`[cleanupFinishedRooms] Cleanup complete: ${totalDeleted} rooms deleted`);
+      console.log(`[cleanupFinishedRooms] Game IDs: ${deletedGameIds.join(", ")}`);
+
+      return null;
+    } catch (error) {
+      console.error("[cleanupFinishedRooms] Error:", error);
+      return null;
+    }
+  });
