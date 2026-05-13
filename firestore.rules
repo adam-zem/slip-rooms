@@ -35,7 +35,7 @@ service cloud.firestore {
       allow read: if request.auth != null;
       // Any authenticated user can create a submission
       allow create: if request.auth != null
-        && request.resource.data.oddieid == request.auth.uid
+        && (request.resource.data.oddieid == request.auth.uid || request.resource.data.userId == request.auth.uid)
         && request.resource.data.prop is string
         && request.resource.data.sport is string
         && request.resource.data.status == "pending";
@@ -94,9 +94,9 @@ service cloud.firestore {
     match /upvotes/{upvoteId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
-        && request.resource.data.oddieid == request.auth.uid;
+        && (request.resource.data.oddieid == request.auth.uid || request.resource.data.userId == request.auth.uid);
       allow delete: if request.auth != null
-        && resource.data.oddieid == request.auth.uid;
+        && (resource.data.oddieid == request.auth.uid || resource.data.userId == request.auth.uid);
     }
 
     // Dislikes collection - downvote tracking
