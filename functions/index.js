@@ -148,7 +148,7 @@ exports.adminDeleteUserHttp = functions.https.onRequest(async (req, res) => {
 
     // Run the deletion (same logic as onCall version)
     const deletionSummary = {
-      posts: 0, likes: 0, dislikes: 0, reposts: 0,
+      posts: 0, upvotes: 0, dislikes: 0, reposts: 0,
       notifications: 0,
       conversations: 0, roomMessages: 0, roomSubmissions: 0,
       reports: 0, filterLogs: 0, blockedReferences: 0,
@@ -158,8 +158,8 @@ exports.adminDeleteUserHttp = functions.https.onRequest(async (req, res) => {
     deletionSummary.posts = await deleteQueryBatches(
       db.collection("posts").where("authorId", "==", targetUserId)
     );
-    deletionSummary.likes = await deleteQueryBatches(
-      db.collection("likes").where("userId", "==", targetUserId)
+    deletionSummary.upvotes = await deleteQueryBatches(
+      db.collection("upvotes").where("userId", "==", targetUserId)
     );
     deletionSummary.dislikes = await deleteQueryBatches(
       db.collection("dislikes").where("userId", "==", targetUserId)
@@ -316,7 +316,7 @@ exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
   // Track deletion summary
   const summary = {
     posts: 0,
-    likes: 0,
+    upvotes: 0,
     dislikes: 0,
     reposts: 0,
     notifications: 0,
@@ -342,9 +342,9 @@ exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
     const postsQuery = db.collection("posts").where("authorId", "==", targetUserId);
     summary.posts = await deleteQueryBatches(postsQuery);
 
-    // Likes
-    const likesQuery = db.collection("likes").where("userId", "==", targetUserId);
-    summary.likes = await deleteQueryBatches(likesQuery);
+    // Upvotes
+    const upvotesQuery = db.collection("upvotes").where("userId", "==", targetUserId);
+    summary.upvotes = await deleteQueryBatches(upvotesQuery);
 
     // Dislikes
     const dislikesQuery = db.collection("dislikes").where("userId", "==", targetUserId);
@@ -1050,52 +1050,6 @@ exports.onNewFollower = functions.firestore
       console.log(`[onNewFollower] Notification sent to ${followedId}`);
     } catch (error) {
       console.error("[onNewFollower] Error:", error);
-    }
-  });
-
-/**
- * Trigger: New like created
- * Sends push notification to the post author
- */
-exports.onNewLike = functions.firestore
-  .document("likes/{likeId}")
-  .onCreate(async (snap, context) => {
-    const data = snap.data();
-    const likerId = data.userId;
-    const postId = data.postId;
-
-    if (!likerId || !postId) return;
-
-    try {
-      // Get the post to find the author
-      const postDoc = await db.collection("posts").doc(postId).get();
-      if (!postDoc.exists) return;
-
-      const post = postDoc.data();
-      const authorId = post.authorId;
-
-      // Check if we should notify (handles self-action, blocks, prefs, token)
-      const { allowed, token, actorData } = await shouldNotifyUser(authorId, likerId, "upvotes");
-      if (!allowed) return;
-
-      const likerName = actorData?.username || "Someone";
-      const postPreview = post.text ? post.text.substring(0, 50) : "your post";
-
-      await sendExpoPushNotification(
-        token,
-        "New Upvote",
-        `${likerName} upvoted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
-        {
-          type: "upvote",
-          postId,
-          fromUserId: likerId,
-          fromUsername: likerName,
-        }
-      );
-
-      console.log(`[onNewLike] Notification sent to ${authorId}`);
-    } catch (error) {
-      console.error("[onNewLike] Error:", error);
     }
   });
 

@@ -91,15 +91,6 @@ service cloud.firestore {
     // ENGAGEMENT
     // =================================================================
 
-    // Likes collection - LEGACY (kept for back-compat, scheduled for removal after Item 7 code cleanup)
-    match /likes/{likeId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && request.resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn()
-        && resource.data.userId == request.auth.uid;
-    }
-
     // Upvotes collection - primary upvote tracking
     match /upvotes/{upvoteId} {
       allow read: if isSignedIn();
