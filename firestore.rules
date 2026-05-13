@@ -29,26 +29,6 @@ service cloud.firestore {
       }
     }
 
-    // Friend requests collection
-    match /friendRequests/{requestId} {
-      // Anyone can read friend requests (to check if already sent)
-      allow read: if request.auth != null;
-      // Only the sender can create a request
-      allow create: if request.auth != null
-        && request.resource.data.from == request.auth.uid;
-      // Both sender and recipient can delete/update (accept/decline)
-      allow update, delete: if request.auth != null;
-    }
-
-    // Friendships collection
-    match /friendships/{friendshipId} {
-      allow read: if request.auth != null;
-      // Only allow creating friendships where user is one of the parties
-      allow create: if request.auth != null;
-      // Only allow deleting if user is one of the parties
-      allow delete: if request.auth != null;
-    }
-
     // Room Submissions collection (for user-submitted rooms pending approval)
     match /roomSubmissions/{submissionId} {
       // Any authenticated user can read submissions (admins need this)
@@ -255,12 +235,5 @@ service cloud.firestore {
         && request.auth.uid == userId;
     }
 
-    // Friends collection - cleanup collection
-    match /friends/{friendId} {
-      // Any authenticated user can read (in case any frontend uses this)
-      allow read: if request.auth != null;
-      // Any authenticated user can write (matches existing friendships rule pattern)
-      allow write: if request.auth != null;
-    }
   }
 }

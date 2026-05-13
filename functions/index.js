@@ -149,7 +149,7 @@ exports.adminDeleteUserHttp = functions.https.onRequest(async (req, res) => {
     // Run the deletion (same logic as onCall version)
     const deletionSummary = {
       posts: 0, likes: 0, dislikes: 0, reposts: 0,
-      notifications: 0, friendships: 0, friendRequests: 0, friends: 0,
+      notifications: 0,
       conversations: 0, roomMessages: 0, roomSubmissions: 0,
       reports: 0, filterLogs: 0, blockedReferences: 0,
     };
@@ -176,33 +176,6 @@ exports.adminDeleteUserHttp = functions.https.onRequest(async (req, res) => {
       db.collection("notifications").where("fromUserId", "==", targetUserId)
     );
     deletionSummary.notifications = notifReceived + notifSent;
-
-    // Friendships
-    const fs1 = await deleteQueryBatches(
-      db.collection("friendships").where("user1", "==", targetUserId)
-    );
-    const fs2 = await deleteQueryBatches(
-      db.collection("friendships").where("user2", "==", targetUserId)
-    );
-    deletionSummary.friendships = fs1 + fs2;
-
-    // Friend requests
-    const fr1 = await deleteQueryBatches(
-      db.collection("friendRequests").where("from", "==", targetUserId)
-    );
-    const fr2 = await deleteQueryBatches(
-      db.collection("friendRequests").where("to", "==", targetUserId)
-    );
-    deletionSummary.friendRequests = fr1 + fr2;
-
-    // Friends collection
-    const friends1 = await deleteQueryBatches(
-      db.collection("friends").where("oddieid", "==", targetUserId)
-    );
-    const friends2 = await deleteQueryBatches(
-      db.collection("friends").where("oddiefriendid", "==", targetUserId)
-    );
-    deletionSummary.friends = friends1 + friends2;
 
     // Conversations
     const convosSnapshot = await db.collection("conversations")
@@ -347,9 +320,6 @@ exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
     dislikes: 0,
     reposts: 0,
     notifications: 0,
-    friendships: 0,
-    friendRequests: 0,
-    friends: 0,
     conversations: 0,
     conversationMessages: 0,
     roomMessages: 0,
@@ -392,26 +362,7 @@ exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
     summary.notifications += await deleteQueryBatches(notificationsQuery1);
     summary.notifications += await deleteQueryBatches(notificationsQuery2);
 
-    // Phase 4: Delete social connections
-    // Friendships (user1 or user2 matches)
-    const friendshipsQuery1 = db.collection("friendships").where("user1", "==", targetUserId);
-    const friendshipsQuery2 = db.collection("friendships").where("user2", "==", targetUserId);
-    summary.friendships += await deleteQueryBatches(friendshipsQuery1);
-    summary.friendships += await deleteQueryBatches(friendshipsQuery2);
-
-    // Friend requests (from or to matches)
-    const friendRequestsQuery1 = db.collection("friendRequests").where("from", "==", targetUserId);
-    const friendRequestsQuery2 = db.collection("friendRequests").where("to", "==", targetUserId);
-    summary.friendRequests += await deleteQueryBatches(friendRequestsQuery1);
-    summary.friendRequests += await deleteQueryBatches(friendRequestsQuery2);
-
-    // Friends collection (userId or friendId matches)
-    const friendsQuery1 = db.collection("friends").where("userId", "==", targetUserId);
-    const friendsQuery2 = db.collection("friends").where("friendId", "==", targetUserId);
-    summary.friends += await deleteQueryBatches(friendsQuery1);
-    summary.friends += await deleteQueryBatches(friendsQuery2);
-
-    // Phase 5: Delete conversations and messages
+    // Phase 4: Delete conversations and messages
     // Find conversations where user is a participant
     const conversationsSnapshot = await db.collection("conversations")
       .where("participants", "array-contains", targetUserId)
