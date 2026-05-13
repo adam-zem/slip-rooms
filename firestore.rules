@@ -1,74 +1,70 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // =================================================================
+    // HELPER FUNCTIONS
+    // =================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    function isAdminOrMod() {
+      return isSignedIn() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+         || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isMod == true);
+    }
+
+    // =================================================================
+    // USER & AUTH
+    // =================================================================
+
     // Users collection
     match /users/{userId} {
       // Any authenticated user can read profiles (for viewing other users)
-      allow read: if request.auth != null;
+      allow read: if isSignedIn();
       // Users can only write their own profile
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Rooms collection - any authenticated user can read/update rooms, only admins can create/delete
-    match /rooms/{roomId} {
-      allow read: if request.auth != null;
-      // Authenticated users can create rooms (must set createdBy to their own uid)
-      allow create: if request.auth != null
-        && request.resource.data.createdBy == request.auth.uid;
-      allow update: if request.auth != null; // For userCount/presence tracking
-      // Only admins can delete rooms
-      allow delete: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
-
-      // Messages subcollection - any authenticated user can read/write messages
-      match /messages/{messageId} {
-        allow read: if request.auth != null;
-        allow create: if request.auth != null
-          && request.resource.data.username is string
-          && request.resource.data.text is string;
-      }
+    // Usernames collection - username reservation/lookup
+    match /usernames/{username} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if false;
+      allow delete: if false;
     }
 
-    // Room Submissions collection (for user-submitted rooms pending approval)
-    match /roomSubmissions/{submissionId} {
-      // Any authenticated user can read submissions (admins need this)
-      allow read: if request.auth != null;
-      // Any authenticated user can create a submission
-      allow create: if request.auth != null
-        && (request.resource.data.oddieid == request.auth.uid || request.resource.data.userId == request.auth.uid)
-        && request.resource.data.prop is string
-        && request.resource.data.sport is string
-        && request.resource.data.status == "pending";
-      // Only admins can update (approve/reject) - for now allow any authenticated user
-      // In production, add admin check: && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
-      allow update: if request.auth != null;
-      // Only admins can delete
-      allow delete: if request.auth != null;
+    // Presence - online/offline status tracking
+    match /presence/{userId} {
+      // Any authenticated user can read presence
+      allow read: if isSignedIn();
+      // Only the user themselves can write their own presence
+      allow write: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Broadcasts collection (admin/mod push notification audit log)
-    // Only Cloud Functions can write (using admin SDK); any authenticated user can read for transparency
-    match /broadcasts/{broadcastId} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
+    // =================================================================
+    // CONTENT
+    // =================================================================
 
     // Posts collection - core social feed content
     match /posts/{postId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
         && request.resource.data.authorId == request.auth.uid;
       // Author can update anything; any auth user can update ONLY engagement fields
-      allow update: if request.auth != null
+      allow update: if isSignedIn()
         && (resource.data.authorId == request.auth.uid
             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'metrics',
                 'upvotes',
-                'thumbsUp',
-                'thumbsUpCount',
                 'downvotes',
-                'thumbsDown',
-                'thumbsDownCount',
                 'voteScore',
                 'reposts',
                 'repostsCount',
@@ -76,93 +72,96 @@ service cloud.firestore {
                 'repliesCount',
                 'commentsCount'
               ]));
-      allow delete: if request.auth != null
-        && (resource.data.authorId == request.auth.uid
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+      allow delete: if isSignedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
     }
 
-    // Likes collection - upvote tracking
+    // Hashtags collection - trending and usage tracking
+    match /hashtags/{hashtagId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // =================================================================
+    // ENGAGEMENT
+    // =================================================================
+
+    // Likes collection - LEGACY (kept for back-compat, scheduled for removal after Item 7 code cleanup)
     match /likes/{likeId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid;
-      allow delete: if request.auth != null
+      allow delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
     }
 
-    // Upvotes collection - alternative upvote tracking
+    // Upvotes collection - primary upvote tracking
     match /upvotes/{upvoteId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
         && (request.resource.data.oddieid == request.auth.uid || request.resource.data.userId == request.auth.uid);
-      allow delete: if request.auth != null
+      allow delete: if isSignedIn()
         && (resource.data.oddieid == request.auth.uid || resource.data.userId == request.auth.uid);
     }
 
     // Dislikes collection - downvote tracking
     match /dislikes/{dislikeId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid;
-      allow delete: if request.auth != null
+      allow delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
     }
 
     // Reposts collection - repost tracking
     match /reposts/{repostId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid;
-      allow delete: if request.auth != null
+      allow delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
     }
 
     // Followers collection - follow relationship tracking
     match /followers/{followId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow delete: if request.auth != null;
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow delete: if isSignedIn();
     }
 
-    // Hashtags collection - trending and usage tracking
-    match /hashtags/{hashtagId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
+    // =================================================================
+    // MESSAGING
+    // =================================================================
 
-    // Usernames collection - username reservation/lookup
-    match /usernames/{username} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if false;
-      allow delete: if false;
-    }
+    // Rooms collection - chat rooms
+    match /rooms/{roomId} {
+      allow read: if isSignedIn();
+      // Authenticated users can create rooms (must set createdBy to their own uid)
+      allow create: if isSignedIn()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isSignedIn(); // For userCount/presence tracking
+      // Only admins can delete rooms
+      allow delete: if isAdmin();
 
-    // Notifications collection - user notification inbox
-    match /notifications/{notificationId} {
-      // Only the owner (user the notif is for) can read
-      allow read: if request.auth != null
-        && resource.data.userId == request.auth.uid;
-      // Anyone authenticated can create notifications (because actors create notifs for other users)
-      allow create: if request.auth != null;
-      // Only the owner can update (e.g., marking as read)
-      allow update: if request.auth != null
-        && resource.data.userId == request.auth.uid;
-      // Only the owner can delete
-      allow delete: if request.auth != null
-        && resource.data.userId == request.auth.uid;
+      // Messages subcollection - any authenticated user can read/write messages
+      match /messages/{messageId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+          && request.resource.data.username is string
+          && request.resource.data.text is string;
+      }
     }
 
     // Conversations collection - DM threads
     match /conversations/{conversationId} {
       // Only participants can read the conversation
-      allow read: if request.auth != null
+      allow read: if isSignedIn()
         && request.auth.uid in resource.data.participants;
       // Only allow creating conversations that include the creator as a participant
-      allow create: if request.auth != null
+      allow create: if isSignedIn()
         && request.auth.uid in request.resource.data.participants;
       // Only participants can update (e.g., updating lastMessage, unread counts, etc.)
-      allow update: if request.auth != null
+      allow update: if isSignedIn()
         && request.auth.uid in resource.data.participants;
       // No deletes for now (DMs aren't user-deletable yet)
       allow delete: if false;
@@ -170,69 +169,97 @@ service cloud.firestore {
       // Messages subcollection - same participant gating
       match /messages/{messageId} {
         // Only conversation participants can read messages
-        allow read: if request.auth != null
+        allow read: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
         // Only conversation participants AND only as the sender can create messages
-        allow create: if request.auth != null
+        allow create: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
           && request.resource.data.senderId == request.auth.uid;
-        // No edits, no deletes (per Jake — both planned for future)
+        // No edits, no deletes (message editing planned for future)
         allow update: if false;
         allow delete: if false;
       }
     }
 
+    // Notifications collection - user notification inbox
+    match /notifications/{notificationId} {
+      // Only the owner (user the notif is for) can read
+      allow read: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      // Anyone authenticated can create notifications (because actors create notifs for other users)
+      allow create: if isSignedIn();
+      // Only the owner can update (e.g., marking as read)
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      // Only the owner can delete
+      allow delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // =================================================================
+    // ROOMS & SUBMISSIONS
+    // =================================================================
+
+    // Room Submissions collection (for user-submitted rooms pending approval)
+    match /roomSubmissions/{submissionId} {
+      // Any authenticated user can read submissions (admins need this)
+      allow read: if isSignedIn();
+      // Any authenticated user can create a submission
+      allow create: if isSignedIn()
+        && (request.resource.data.oddieid == request.auth.uid || request.resource.data.userId == request.auth.uid)
+        && request.resource.data.prop is string
+        && request.resource.data.sport is string
+        && request.resource.data.status == "pending";
+      // TODO: tighten to admin-only updates. Currently permissive while moderation workflow is in development.
+      allow update: if isSignedIn();
+      // Only admins can delete
+      allow delete: if isSignedIn();
+    }
+
+    // =================================================================
+    // ADMIN & MODERATION
+    // =================================================================
+
     // Reports collection - user-submitted reports for moderation review
     match /reports/{reportId} {
       // Only admins and mods can read reports
-      allow read: if request.auth != null
-        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isMod == true);
+      allow read: if isAdminOrMod();
       // Any authenticated user can submit a report
-      allow create: if request.auth != null;
+      allow create: if isSignedIn();
       // Only admins and mods can update (mark resolved, etc.) or delete
-      allow update, delete: if request.auth != null
-        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isMod == true);
+      allow update, delete: if isAdminOrMod();
     }
 
     // Admin logs - audit log of admin actions
     match /adminLogs/{logId} {
       // Only admins can read or write
-      allow read: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
-      allow write: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow read: if isAdmin();
+      allow write: if isAdmin();
     }
 
     // Banned words - admin-managed filter list
     match /bannedWords/{wordId} {
       // Any authenticated user can read (frontend filter check)
-      allow read: if request.auth != null;
+      allow read: if isSignedIn();
       // Only admins can write
-      allow write: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow write: if isAdmin();
     }
 
     // Filter logs - logs of filter violations
     match /filterLogs/{logId} {
       // Only admins can read
-      allow read: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow read: if isAdmin();
       // Any authenticated user can create (frontend logs the violation)
-      allow create: if request.auth != null;
+      allow create: if isSignedIn();
       // Only admins can update or delete
-      allow update, delete: if request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+      allow update, delete: if isAdmin();
     }
 
-    // Presence - online/offline status tracking
-    match /presence/{userId} {
-      // Any authenticated user can read presence
-      allow read: if request.auth != null;
-      // Only the user themselves can write their own presence
-      allow write: if request.auth != null
-        && request.auth.uid == userId;
+    // Broadcasts collection (admin/mod push notification audit log)
+    // Only Cloud Functions can write (using admin SDK); any authenticated user can read for transparency
+    match /broadcasts/{broadcastId} {
+      allow read: if isSignedIn();
+      allow write: if false;
     }
 
   }
