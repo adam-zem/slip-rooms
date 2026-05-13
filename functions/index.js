@@ -338,11 +338,9 @@ exports.adminDeleteUser = functions.https.onCall(async (data, context) => {
     // Phase 1: Already done - got user data
 
     // Phase 2: Delete user-created content
-    // Posts (where authorId or userId matches)
-    const postsQuery1 = db.collection("posts").where("authorId", "==", targetUserId);
-    const postsQuery2 = db.collection("posts").where("userId", "==", targetUserId);
-    summary.posts += await deleteQueryBatches(postsQuery1);
-    summary.posts += await deleteQueryBatches(postsQuery2);
+    // Posts
+    const postsQuery = db.collection("posts").where("authorId", "==", targetUserId);
+    summary.posts = await deleteQueryBatches(postsQuery);
 
     // Likes
     const likesQuery = db.collection("likes").where("userId", "==", targetUserId);
@@ -1074,7 +1072,7 @@ exports.onNewLike = functions.firestore
       if (!postDoc.exists) return;
 
       const post = postDoc.data();
-      const authorId = post.authorId || post.userId;
+      const authorId = post.authorId;
 
       // Check if we should notify (handles self-action, blocks, prefs, token)
       const { allowed, token, actorData } = await shouldNotifyUser(authorId, likerId, "upvotes");
@@ -1120,7 +1118,7 @@ exports.onNewRepost = functions.firestore
       if (!postDoc.exists) return;
 
       const post = postDoc.data();
-      const authorId = post.authorId || post.userId;
+      const authorId = post.authorId;
 
       // Check if we should notify (handles self-action, blocks, prefs, token)
       const { allowed, token, actorData } = await shouldNotifyUser(authorId, reposterId, "reposts");
@@ -1158,7 +1156,7 @@ exports.onNewPost = functions.firestore
   .onCreate(async (snap, context) => {
     const data = snap.data();
     const postId = context.params.postId;
-    const authorId = data.authorId || data.userId;
+    const authorId = data.authorId;
     const postText = data.text || "";
 
     if (!authorId) return;
@@ -1178,7 +1176,7 @@ exports.onNewPost = functions.firestore
         const parentDoc = await db.collection("posts").doc(replyToPostId).get();
         if (parentDoc.exists) {
           const parentPost = parentDoc.data();
-          const parentAuthorId = parentPost.authorId || parentPost.userId;
+          const parentAuthorId = parentPost.authorId;
 
           // Check if we should notify parent author
           const { allowed, token } = await shouldNotifyUser(parentAuthorId, authorId, "replies");
