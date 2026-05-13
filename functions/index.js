@@ -1100,6 +1100,50 @@ exports.onNewLike = functions.firestore
   });
 
 /**
+ * Trigger: New upvote created
+ * Sends push notification to the post author
+ */
+exports.onNewUpvote = functions.firestore
+  .document("upvotes/{upvoteId}")
+  .onCreate(async (snap, context) => {
+    const data = snap.data();
+    const voterId = data.userId || data.oddieid;
+    const postId = data.postId;
+
+    if (!voterId || !postId) return;
+
+    try {
+      const postDoc = await db.collection("posts").doc(postId).get();
+      if (!postDoc.exists) return;
+
+      const post = postDoc.data();
+      const authorId = post.authorId;
+
+      const { allowed, token, actorData } = await shouldNotifyUser(authorId, voterId, "upvotes");
+      if (!allowed) return;
+
+      const voterName = actorData?.username || "Someone";
+      const postPreview = post.text ? post.text.substring(0, 50) : "your post";
+
+      await sendExpoPushNotification(
+        token,
+        "New Upvote",
+        `${voterName} upvoted ${postPreview}${post.text && post.text.length > 50 ? "..." : ""}`,
+        {
+          type: "upvote",
+          postId,
+          fromUserId: voterId,
+          fromUsername: voterName,
+        }
+      );
+
+      console.log(`[onNewUpvote] Notification sent to ${authorId}`);
+    } catch (error) {
+      console.error("[onNewUpvote] Error:", error);
+    }
+  });
+
+/**
  * Trigger: New repost created
  * Sends push notification to the original post author
  */
