@@ -49,18 +49,6 @@ service cloud.firestore {
       allow delete: if request.auth != null;
     }
 
-    // Greatest Hits collection
-    match /greatestHits/{hitId} {
-      // Anyone can read greatest hits
-      allow read: if request.auth != null;
-      // Users can only create their own hits
-      allow create: if request.auth != null
-        && request.resource.data.userId == request.auth.uid;
-      // Users can only delete their own hits
-      allow delete: if request.auth != null
-        && resource.data.userId == request.auth.uid;
-    }
-
     // Room Submissions collection (for user-submitted rooms pending approval)
     match /roomSubmissions/{submissionId} {
       // Any authenticated user can read submissions (admins need this)
