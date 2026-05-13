@@ -926,14 +926,16 @@ exports.recordHashtags = functions.https.onCall(async (data, context) => {
 });
 
 // Send password reset email via Resend
-exports.sendPasswordResetEmail = functions.https.onCall(async (data, context) => {
+exports.sendPasswordResetEmail = functions
+  .runWith({ secrets: ["RESEND_API_KEY"] })
+  .https.onCall(async (data, context) => {
   const { email } = data;
   if (!email) throw new functions.https.HttpsError("invalid-argument", "Email is required");
 
   try {
     const resetLink = await auth.generatePasswordResetLink(email);
     const { Resend } = require("resend");
-    const resend = new Resend("re_VXXTtmX8_58BP8VQdjHQEZB3VtTtjj25E");
+    const resend = new Resend(process.env.RESEND_API_KEY);
 
     await resend.emails.send({
       from: "SlipRooms <support@sliprooms.com>",
@@ -994,15 +996,6 @@ async function sendExpoPushNotification(expoPushToken, title, body, data = {}) {
   } catch (error) {
     console.error("[PushNotification] Error sending:", error);
   }
-}
-
-/**
- * Get user data with push token
- */
-async function getUserWithPushToken(userId) {
-  const userDoc = await db.collection("users").doc(userId).get();
-  if (!userDoc.exists) return null;
-  return { id: userId, ...userDoc.data() };
 }
 
 /**
