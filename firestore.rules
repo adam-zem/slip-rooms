@@ -70,12 +70,7 @@ service cloud.firestore {
                 'repostsCount',
                 'replies',
                 'repliesCount',
-                'commentsCount',
-                // Legacy engagement fields. Restored 2026-05-13 after audit Phase 5 broke writes. To be removed after Part B code cleanup.
-                'thumbsUp',
-                'thumbsUpCount',
-                'thumbsDown',
-                'thumbsDownCount'
+                'commentsCount'
               ]));
       allow delete: if isSignedIn()
         && (resource.data.authorId == request.auth.uid || isAdmin());
