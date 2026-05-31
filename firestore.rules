@@ -38,7 +38,8 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update: if false;
-      allow delete: if false;
+      // Allow delete only if the username belongs to the authenticated user
+      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
     }
 
     // Presence - online/offline status tracking
