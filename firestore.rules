@@ -134,6 +134,9 @@ service cloud.firestore {
         allow create: if isSignedIn()
           && request.resource.data.username is string
           && request.resource.data.text is string;
+        // Allow any authenticated user to update ONLY the reactions field (for emoji reactions)
+        allow update: if isSignedIn()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
       }
     }
 
