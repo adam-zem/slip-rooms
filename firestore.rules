@@ -219,12 +219,20 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Banned words - admin-managed filter list
+    // Banned words - admin/mod managed filter list (HARD LIST - starred everywhere except DMs)
     match /bannedWords/{wordId} {
       // Any authenticated user can read (frontend filter check)
       allow read: if isSignedIn();
-      // Only admins can write
-      allow write: if isAdmin();
+      // Admins and mods can write
+      allow write: if isAdminOrMod();
+    }
+
+    // Blocked hashtags - admin/mod managed filter list (SOFT LIST - can't trend, shows no results)
+    match /blockedHashtags/{hashtagId} {
+      // Any authenticated user can read (frontend hashtag check)
+      allow read: if isSignedIn();
+      // Admins and mods can write
+      allow write: if isAdminOrMod();
     }
 
     // Filter logs - logs of filter violations
